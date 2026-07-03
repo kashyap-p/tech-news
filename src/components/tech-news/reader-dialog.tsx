@@ -74,33 +74,53 @@ export function ReaderDialog({
   // bounded flex column: header + action bar are fixed, only this body scrolls.
   const scrollBodyRef = useRef<HTMLDivElement>(null);
 
-  const loadRead = useCallback(async (id: string, force = false) => {
-    setLoadingRead(true);
-    setError(null);
-    setRead(null);
-    try {
-      const res = await fetch("/api/news/read", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ articleId: id, force }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Failed to load article");
-      setRead(data);
-    } catch (e: any) {
-      setError(e?.message || "Failed to load article content");
-    } finally {
-      setLoadingRead(false);
-    }
-  }, []);
+  const loadRead = useCallback(
+    async (art: ArticleDTO, force = false) => {
+      setLoadingRead(true);
+      setError(null);
+      setRead(null);
+      try {
+        const res = await fetch("/api/news/read", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            articleId: art.id,
+            title: art.title,
+            description: art.description,
+            url: art.url,
+            source: art.source,
+            author: art.author,
+            publishedAt: art.publishedAt,
+            force,
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || "Failed to load article");
+        setRead(data);
+      } catch (e: any) {
+        setError(e?.message || "Failed to load article content");
+      } finally {
+        setLoadingRead(false);
+      }
+    },
+    [],
+  );
 
-  const loadSummary = useCallback(async (id: string) => {
+  const loadSummary = useCallback(async (art: ArticleDTO) => {
     setLoadingSummary(true);
     try {
       const res = await fetch("/api/news/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ articleId: id }),
+        body: JSON.stringify({
+          articleId: art.id,
+          title: art.title,
+          description: art.description,
+          url: art.url,
+          source: art.source,
+          author: art.author,
+          publishedAt: art.publishedAt,
+        }),
       });
       const data = await res.json();
       if (data.success) {
@@ -120,7 +140,7 @@ export function ReaderDialog({
           ? { summary: article.aiSummary, tags: (article.aiTags || "").split(",").filter(Boolean) }
           : null,
       );
-      loadRead(article.id);
+      loadRead(article);
     } else {
       setRead(null);
       setSummary(null);
@@ -259,7 +279,7 @@ export function ReaderDialog({
               size="sm"
               className="h-8 px-2.5"
               onClick={() => {
-                if (!summary && !loadingSummary) loadSummary(article.id);
+                if (!summary && !loadingSummary) loadSummary(article);
               }}
               disabled={!!summary || loadingSummary}
             >
@@ -352,7 +372,7 @@ export function ReaderDialog({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => loadRead(article.id, true)}
+                    onClick={() => loadRead(article, true)}
                   >
                     <RefreshCw className="mr-1.5 h-4 w-4" /> Retry
                   </Button>
@@ -392,7 +412,7 @@ export function ReaderDialog({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => loadRead(article.id, true)}
+                      onClick={() => loadRead(article, true)}
                       disabled={loadingRead}
                     >
                       <RefreshCw className="mr-1.5 h-4 w-4" /> Re-extract

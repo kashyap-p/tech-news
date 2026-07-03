@@ -1,20 +1,33 @@
 import { NextResponse } from "next/server";
-import { summarizeArticle } from "@/lib/ai";
+import { summarizeArticle, ArticleInput } from "@/lib/ai";
 
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/news/summarize
- * body: { articleId: string }
- * Returns AI summary + tags (lazy-populated on the article).
+ * body: { articleId, title, description?, url, source?, author?, publishedAt? }
+ * Returns AI summary + tags (lazy-populated on the article when DB available).
+ * Works with or without a DB — the article data comes from the client.
  */
 export async function POST(req: Request) {
   try {
-    const { articleId } = await req.json();
-    if (!articleId || typeof articleId !== "string") {
-      return NextResponse.json({ success: false, error: "articleId required" }, { status: 400 });
+    const body = await req.json();
+    const input: ArticleInput = {
+      articleId: body.articleId,
+      title: body.title,
+      description: body.description,
+      url: body.url,
+      source: body.source,
+      author: body.author,
+      publishedAt: body.publishedAt,
+    };
+    if (!input.articleId || !input.url || !input.title) {
+      return NextResponse.json(
+        { success: false, error: "articleId, title, and url are required" },
+        { status: 400 },
+      );
     }
-    const result = await summarizeArticle(articleId);
+    const result = await summarizeArticle(input);
     if (!result) {
       return NextResponse.json({ success: false, error: "Could not summarize" }, { status: 502 });
     }

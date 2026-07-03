@@ -9,8 +9,13 @@ import { db } from "@/lib/db";
  *  - z-ai-web-dev-sdk `web_search` for live worldwide AI & tech news
  *
  * All fetching happens server-side (no CORS, no client API exposure).
- * Results are normalised into a single Article shape, persisted to the DB
- * (upsert by sourceId) and cached in-memory for a short TTL.
+ *
+ * IMPORTANT (Vercel/serverless compatibility):
+ * The database is an OPTIONAL cache. DTOs are built directly from the raw
+ * fetched data so the feed works even when the DB is unavailable (e.g. on
+ * Vercel's read-only filesystem with SQLite). Persistence is best-effort —
+ * if `db.article.upsert` fails, articles are still returned with their
+ * `sourceId` used as the `id` field.
  */
 
 export type NewsSource = "devto" | "hackernews" | "web";
@@ -71,6 +76,33 @@ async function fetchWithTimeout(url: string, timeoutMs = 10000, init?: RequestIn
 }
 
 // ---------------------------------------------------------------------------
+// ZAI SDK factory — supports env vars for Vercel, falls back to config file.
+// ---------------------------------------------------------------------------
+let zaiPromise: Promise<any> | null = null;
+export async function createZAI(): Promise<any> {
+  if (zaiPromise) return zaiPromise;
+  const ZAI = (await import("z-ai-web-dev-sdk")).default;
+  const baseUrl = process.env.ZAI_BASE_URL;
+  const apiKey = process.env.ZAI_API_KEY;
+  if (baseUrl && apiKey) {
+    // Vercel / cloud: use env vars.
+    zaiPromise = Promise.resolve(
+      new ZAI({
+        baseUrl,
+        apiKey,
+        chatId: process.env.ZAI_CHAT_ID || "",
+        token: process.env.ZAI_TOKEN || "",
+        userId: process.env.ZAI_USER_ID || "",
+      } as any),
+    );
+  } else {
+    // Local dev: read from /etc/.z-ai-config (ZAI.create() handles this).
+    zaiPromise = ZAI.create();
+  }
+  return zaiPromise;
+}
+
+// ---------------------------------------------------------------------------
 // Dev.to
 // ---------------------------------------------------------------------------
 const DEVTO_TAGS = [
@@ -102,9 +134,10 @@ async function fetchDevTo(): Promise<RawArticle[]> {
     for (const item of r.value) {
       if (!item?.id || seen.has(item.id)) continue;
       seen.add(item.id);
-      const tag = item.tag_list?.includes("ai") || item.tag_list?.includes("machinelearning")
-        ? "ai"
-        : "devto";
+      const tag =
+        item.tag_list?.includes("ai") || item.tag_list?.includes("machinelearning")
+          ? "ai"
+          : "devto";
       articles.push({
         source: "devto",
         sourceId: `devto:${item.id}`,
@@ -160,8 +193,7 @@ async function fetchWebNewsTech(): Promise<RawArticle[]> {
 
 async function fetchWebNews(query: string, category: string): Promise<RawArticle[]> {
   try {
-    const ZAI = (await import("z-ai-web-dev-sdk")).default;
-    const zai = await ZAI.create();
+    const zai = await createZAI();
     const results: any[] = await zai.functions.invoke("web_search", {
       query,
       num: 15,
@@ -189,63 +221,107 @@ async function fetchWebNews(query: string, category: string): Promise<RawArticle
 }
 
 // ---------------------------------------------------------------------------
-// Persist + normalise
+// Normalise raw → DTO (no DB required)
 // ---------------------------------------------------------------------------
-async function persist(raw: RawArticle[]): Promise<ArticleDTO[]> {
-  const dtos: ArticleDTO[] = [];
-  for (const r of raw) {
-    if (!r.title || !r.url) continue;
-    const category: string = r.category || r.source;
-    const pub = r.publishedAt ? new Date(r.publishedAt) : null;
-    const pubValid = pub && !isNaN(pub.getTime()) ? pub : null;
-    try {
-      const article = await db.article.upsert({
-        where: { sourceId: r.sourceId },
-        create: {
-          sourceId: r.sourceId,
-          source: r.source,
-          category,
-          title: r.title.slice(0, 500),
-          description: (r.description || "").slice(0, 1000),
-          url: r.url,
-          image: r.image || null,
-          author: r.author || null,
-          publishedAt: pubValid,
-          points: r.points ?? 0,
-        },
-        update: {
-          // refresh mutable fields but keep AI-generated content
-          description: (r.description || "").slice(0, 1000),
-          image: r.image || null,
-          points: r.points ?? 0,
-          publishedAt: pubValid ?? undefined,
-        },
-      });
-      dtos.push(toDTO(article));
-    } catch (e) {
-      // skip on error (e.g. invalid date) — don't fail the whole batch
+function rawToDTO(r: RawArticle): ArticleDTO {
+  const pub = r.publishedAt ? new Date(r.publishedAt) : null;
+  const pubValid = pub && !isNaN(pub.getTime()) ? pub.toISOString() : null;
+  return {
+    // Use sourceId as the id. This is unique per article and lets the
+    // frontend call read/summarize/bookmark APIs even when the DB is
+    // unavailable (the APIs accept the full article data from the client).
+    id: r.sourceId,
+    source: r.source,
+    sourceId: r.sourceId,
+    category: r.category || r.source,
+    title: r.title,
+    description: r.description || "",
+    url: r.url,
+    image: r.image || null,
+    author: r.author || null,
+    publishedAt: pubValid,
+    aiSummary: null,
+    aiTags: null,
+    points: r.points ?? 0,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/** Check if the DB is available (best-effort). */
+async function isDbAvailable(): Promise<boolean> {
+  try {
+    await db.$queryRaw`SELECT 1`;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Best-effort: enrich DTOs with cached AI summary/tags from the DB.
+ * If the DB is unavailable, returns the DTOs unchanged.
+ */
+async function tryEnrich(dtos: ArticleDTO[]): Promise<ArticleDTO[]> {
+  if (dtos.length === 0) return dtos;
+  const ok = await isDbAvailable();
+  if (!ok) return dtos;
+  const sourceIds = dtos.map((d) => d.sourceId);
+  try {
+    const cached = await db.article.findMany({
+      where: { sourceId: { in: sourceIds } },
+      select: { sourceId: true, aiSummary: true, aiTags: true },
+    });
+    const cacheMap = new Map(cached.map((c) => [c.sourceId, c]));
+    for (const dto of dtos) {
+      const c = cacheMap.get(dto.sourceId);
+      if (c) {
+        dto.aiSummary = c.aiSummary;
+        dto.aiTags = c.aiTags;
+      }
     }
+  } catch {
+    // ignore — enrichment is optional
   }
   return dtos;
 }
 
-function toDTO(a: any): ArticleDTO {
-  return {
-    id: a.id,
-    source: a.source,
-    sourceId: a.sourceId,
-    category: a.category,
-    title: a.title,
-    description: a.description,
-    url: a.url,
-    image: a.image,
-    author: a.author,
-    publishedAt: a.publishedAt ? new Date(a.publishedAt).toISOString() : null,
-    aiSummary: a.aiSummary,
-    aiTags: a.aiTags,
-    points: a.points,
-    createdAt: new Date(a.createdAt).toISOString(),
-  };
+/**
+ * Best-effort background persistence. Never blocks the response.
+ * If the DB is unavailable, this is a no-op.
+ */
+function tryPersistInBackground(dtos: ArticleDTO[]): void {
+  void (async () => {
+    const ok = await isDbAvailable();
+    if (!ok) return;
+    for (const dto of dtos) {
+      try {
+        const pub = dto.publishedAt ? new Date(dto.publishedAt) : null;
+        await db.article.upsert({
+          where: { sourceId: dto.sourceId },
+          create: {
+            sourceId: dto.sourceId,
+            source: dto.source,
+            category: dto.category,
+            title: dto.title.slice(0, 500),
+            description: dto.description.slice(0, 1000),
+            url: dto.url,
+            image: dto.image,
+            author: dto.author,
+            publishedAt: pub,
+            points: dto.points,
+          },
+          update: {
+            description: dto.description.slice(0, 1000),
+            image: dto.image,
+            points: dto.points,
+            publishedAt: pub ?? undefined,
+          },
+        });
+      } catch {
+        // skip individual failures
+      }
+    }
+  })();
 }
 
 // ---------------------------------------------------------------------------
@@ -272,9 +348,15 @@ export async function fetchAllNews(force = false): Promise<{
   ]);
 
   const raw = [...devto, ...hn, ...webAI, ...webTech];
-  let articles = await persist(raw);
+  // Build DTOs directly from raw data — NO DB dependency for the core path.
+  let articles: ArticleDTO[] = raw.filter((r) => r.title && r.url).map(rawToDTO);
 
-  // de-dup by url (web search may overlap) keeping highest-points / newest
+  // Best-effort enrichment (cached AI summaries) — never blocks on failure.
+  articles = await tryEnrich(articles);
+  // Best-effort background persistence — never blocks.
+  tryPersistInBackground(articles);
+
+  // De-dup by url (web search may overlap) keeping highest-points / newest.
   const byUrl = new Map<string, ArticleDTO>();
   for (const a of articles) {
     const existing = byUrl.get(a.url);
@@ -298,14 +380,4 @@ export async function fetchAllNews(force = false): Promise<{
     sources: ["devto", "hackernews", "web"],
     fetchedAt: new Date().toISOString(),
   };
-}
-
-export async function getArticleById(id: string) {
-  const a = await db.article.findUnique({ where: { id } });
-  return a ? toDTO(a) : null;
-}
-
-export async function getArticleBySourceId(sourceId: string) {
-  const a = await db.article.findUnique({ where: { sourceId } });
-  return a ? toDTO(a) : null;
 }

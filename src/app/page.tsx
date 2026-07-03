@@ -83,7 +83,9 @@ export default function Home() {
       const res = await fetch("/api/bookmarks", { cache: "no-store" });
       const data = await res.json();
       if (data.success) {
-        const list: ArticleDTO[] = data.bookmarks.map((b: any) => b.article);
+        const list: ArticleDTO[] = (data.bookmarks || []).map((b: any) =>
+          b.article ? b.article : b,
+        );
         setBookmarks(list);
         setBookmarkIds(new Set(list.map((a) => a.id)));
       }
@@ -138,7 +140,7 @@ export default function Home() {
           await fetch("/api/bookmarks", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ articleId: article.id }),
+            body: JSON.stringify({ article }),
           });
         }
       } catch {

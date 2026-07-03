@@ -9,7 +9,8 @@ const ALLOWED_CHANNELS = ["copy", "native", "twitter", "linkedin", "facebook", "
 /**
  * POST /api/share
  * body: { articleId: string, channel: string }
- * Records a share event (analytics only).
+ * Records a share event (analytics only). Degrades gracefully when the DB is
+ * unavailable (Vercel) — returns success without persisting.
  */
 export async function POST(req: Request) {
   try {
@@ -19,10 +20,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "articleId required" }, { status: 400 });
     }
     const safeChannel = ALLOWED_CHANNELS.includes(channel) ? channel : "copy";
-    const event = await db.shareEvent.create({
-      data: { sessionId, articleId, channel: safeChannel },
-    });
-    return NextResponse.json({ success: true, event });
+    try {
+      await db.shareEvent.create({
+        data: { sessionId, articleKey: articleId, channel: safeChannel },
+      });
+    } catch {
+      // DB unavailable (Vercel read-only FS) — analytics only, ignore.
+    }
+    return NextResponse.json({ success: true });
   } catch (err: any) {
     console.error("[api/share] error:", err);
     return NextResponse.json(

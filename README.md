@@ -100,11 +100,38 @@ bun run dev          # start the dev server on http://localhost:3000
 | Model | Purpose |
 |-------|---------|
 | `Article` | Cached news articles (title, url, image, AI summary, AI tags, extracted content) |
-| `Bookmark` | Session-based saved articles |
+| `Bookmark` | Session-based saved articles (self-contained — stores article JSON, no FK) |
 | `ShareEvent` | Share analytics (channel: copy/twitter/linkedin/…) |
 | `ChatMessage` | Pulse chatbot conversation history (per session) |
 
-SQLite via Prisma. The `db/*.db` files are gitignored — run `bun run db:push` to create locally.
+SQLite via Prisma locally. The `db/*.db` files are gitignored — run `bun run db:push` to create locally.
+
+> **The database is optional.** The app is built to work without it on serverless platforms (Vercel's filesystem is read-only). News DTOs are built directly from fetched data, AI features accept article data from the client, and bookmarks fall back to an in-memory store. The DB is used as a best-effort cache for AI summaries, extracted content, and chat history.
+
+---
+
+## ▲ Deploying to Vercel
+
+This app is Vercel-ready. After importing the repo:
+
+1. **Set environment variables** (Project → Settings → Environment Variables). The Z.ai SDK reads from env vars on Vercel because the sandbox `/etc/.z-ai-config` file doesn't exist there:
+
+   | Variable | Value | Required? |
+   |----------|-------|-----------|
+   | `ZAI_BASE_URL` | `https://internal-api.z.ai/v1` | ✅ Yes |
+   | `ZAI_API_KEY` | your api key | ✅ Yes |
+   | `ZAI_TOKEN` | your jwt token | ✅ Yes |
+   | `ZAI_CHAT_ID` | your chat id | ✅ Yes |
+   | `ZAI_USER_ID` | your user id | ✅ Yes |
+   | `DATABASE_URL` | a Postgres URL (e.g. Vercel Postgres) | Optional |
+
+   Get the `ZAI_*` values from your local `/etc/.z-ai-config` file.
+
+2. **Build settings**: leave as defaults. The `postinstall: prisma generate` script runs automatically.
+
+3. **Database (optional)**: For persistent bookmarks/chat-history across serverless instances, connect a Vercel Postgres database and set `DATABASE_URL` to its URL. Without it, the app still works — news + AI features use in-memory caches, and bookmarks use a per-instance memory store.
+
+> **Note:** SQLite (`file:./db/custom.db`) does **not** work on Vercel — the filesystem is read-only. Either use Postgres or leave `DATABASE_URL` unset. The app degrades gracefully either way.
 
 ---
 

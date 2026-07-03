@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { createZAI, fetchAllNews } from "@/lib/news";
 
 /**
  * AI service (backend only — z-ai-web-dev-sdk must never run client-side).
@@ -8,17 +9,30 @@ import { db } from "@/lib/db";
  *  - extractArticleContent(): pull clean readable HTML via page_reader
  *  - chatAboutNews(): multi-turn assistant grounded on the latest articles
  *
- * All helpers are defensive: they degrade gracefully if the SDK or network
- * fails, so the UI never hard-crashes on an AI hiccup.
+ * All helpers are defensive: they degrade gracefully if the SDK, network, OR
+ * the database fails (e.g. on Vercel's read-only filesystem). AI features
+ * work as long as the ZAI env vars are set; the DB is an optional cache.
  */
 
-let zaiPromise: Promise<any> | null = null;
-async function getZAI() {
-  if (!zaiPromise) {
-    const ZAI = (await import("z-ai-web-dev-sdk")).default;
-    zaiPromise = ZAI.create();
+/** Check if the DB is available (best-effort). */
+async function isDbAvailable(): Promise<boolean> {
+  try {
+    await db.$queryRaw`SELECT 1`;
+    return true;
+  } catch {
+    return false;
   }
-  return zaiPromise;
+}
+
+/** The article data passed from the frontend — works with or without a DB. */
+export interface ArticleInput {
+  articleId: string; // sourceId, used as the DB key when available
+  title: string;
+  description?: string;
+  url: string;
+  source?: string;
+  author?: string | null;
+  publishedAt?: string | null;
 }
 
 export interface ArticleSummary {
@@ -29,21 +43,37 @@ export interface ArticleSummary {
 const SYSTEM_SUMMARIZER =
   "You are TechBrief, an expert tech-news analyst. Given an article title and description, produce a concise, neutral summary in 3-4 bullet points and 3-5 short tags. Respond ONLY with valid JSON of shape {\"summary\": string (markdown bullets), \"tags\": string[]}. Do not add commentary outside the JSON.";
 
-export async function summarizeArticle(articleId: string): Promise<ArticleSummary | null> {
-  const article = await db.article.findUnique({ where: { id: articleId } });
-  if (!article) return null;
-  if (article.aiSummary && article.aiTags) {
-    return { summary: article.aiSummary, tags: article.aiTags.split(",").map((t) => t.trim()).filter(Boolean) };
+export async function summarizeArticle(input: ArticleInput): Promise<ArticleSummary | null> {
+  const { articleId, title, description, url } = input;
+  if (!title || !url) return null;
+
+  // Check the DB cache first (best-effort).
+  const dbOk = await isDbAvailable();
+  if (dbOk) {
+    try {
+      const cached = await db.article.findUnique({
+        where: { sourceId: articleId },
+        select: { aiSummary: true, aiTags: true },
+      });
+      if (cached?.aiSummary && cached?.aiTags) {
+        return {
+          summary: cached.aiSummary,
+          tags: cached.aiTags.split(",").map((t) => t.trim()).filter(Boolean),
+        };
+      }
+    } catch {
+      // ignore
+    }
   }
 
   try {
-    const zai = await getZAI();
+    const zai = await createZAI();
     const completion = await zai.chat.completions.create({
       messages: [
         { role: "assistant", content: SYSTEM_SUMMARIZER },
         {
           role: "user",
-          content: `Title: ${article.title}\n\nDescription: ${article.description || "(no description provided)"}\n\nSource: ${article.url}`,
+          content: `Title: ${title}\n\nDescription: ${description || "(no description provided)"}\n\nSource: ${url}`,
         },
       ],
       thinking: { type: "disabled" },
@@ -55,10 +85,32 @@ export async function summarizeArticle(articleId: string): Promise<ArticleSummar
     const tags: string[] = Array.isArray(json.tags)
       ? json.tags.map((t: any) => String(t)).slice(0, 6)
       : [];
-    await db.article.update({
-      where: { id: articleId },
-      data: { aiSummary: summary, aiTags: tags.join(",") },
-    });
+
+    // Cache to DB (best-effort).
+    if (dbOk) {
+      try {
+        // Upsert the article first (in case it doesn't exist yet), then set the summary.
+        await db.article.upsert({
+          where: { sourceId: articleId },
+          create: {
+            sourceId: articleId,
+            source: input.source || "web",
+            category: input.source || "web",
+            title: title.slice(0, 500),
+            description: (description || "").slice(0, 1000),
+            url,
+            author: input.author || null,
+            publishedAt: input.publishedAt ? new Date(input.publishedAt) : null,
+            points: 0,
+            aiSummary: summary,
+            aiTags: tags.join(","),
+          },
+          update: { aiSummary: summary, aiTags: tags.join(",") },
+        });
+      } catch {
+        // ignore
+      }
+    }
     return { summary, tags };
   } catch (err) {
     console.error("[ai] summarize failed:", err);
@@ -94,44 +146,95 @@ export interface ExtractedContent {
   url: string;
 }
 
-export async function extractArticleContent(
-  articleId: string,
-  force = false,
-): Promise<{ content: ExtractedContent | null; article: any }> {
-  const article = await db.article.findUnique({ where: { id: articleId } });
-  if (!article) return { content: null, article: null };
+export interface ArticleMeta {
+  id: string;
+  title: string;
+  url: string;
+  source: string;
+  author: string | null;
+  publishedAt: string | null;
+}
 
-  if (!force && article.content) {
-    return {
-      article,
-      content: {
-        title: article.title,
-        html: article.content,
-        publishedTime: article.publishedAt ? new Date(article.publishedAt).toISOString() : null,
-        url: article.url,
-      },
-    };
+export async function extractArticleContent(
+  input: ArticleInput,
+  force = false,
+): Promise<{ content: ExtractedContent | null; article: ArticleMeta }> {
+  const { articleId, title, url } = input;
+  const article: ArticleMeta = {
+    id: articleId,
+    title,
+    url,
+    source: input.source || "web",
+    author: input.author || null,
+    publishedAt: input.publishedAt || null,
+  };
+
+  const dbOk = await isDbAvailable();
+
+  // Check DB cache first (best-effort).
+  if (!force && dbOk) {
+    try {
+      const cached = await db.article.findUnique({
+        where: { sourceId: articleId },
+        select: { content: true, title: true, publishedAt: true },
+      });
+      if (cached?.content) {
+        return {
+          article,
+          content: {
+            title: cached.title || title,
+            html: cached.content,
+            publishedTime: cached.publishedAt
+              ? new Date(cached.publishedAt).toISOString()
+              : null,
+            url,
+          },
+        };
+      }
+    } catch {
+      // ignore
+    }
   }
 
   try {
-    const zai = await getZAI();
-    const result: any = await zai.functions.invoke("page_reader", { url: article.url });
+    const zai = await createZAI();
+    const result: any = await zai.functions.invoke("page_reader", { url });
     const data = result?.data;
     if (!data?.html) return { article, content: null };
-    // Run readability-style extraction to isolate the actual article body
-    // (the page_reader returns the full page HTML including nav, sidebars,
-    // forms, footers — without this the reader renders as page chrome).
+    // Readability-style extraction isolates the actual article body
+    // (page_reader returns the full page HTML including nav, sidebars, etc.).
     const cleanHtml = extractReadableContent(data.html);
     if (!cleanHtml) return { article, content: null };
-    const title = data.title || article.title;
+    const exTitle = data.title || title;
     const publishedTime = data.publishedTime || null;
-    await db.article.update({
-      where: { id: articleId },
-      data: { content: cleanHtml.slice(0, 200000) },
-    });
+
+    // Cache to DB (best-effort).
+    if (dbOk) {
+      try {
+        await db.article.upsert({
+          where: { sourceId: articleId },
+          create: {
+            sourceId: articleId,
+            source: input.source || "web",
+            category: input.source || "web",
+            title: title.slice(0, 500),
+            description: (input.description || "").slice(0, 1000),
+            url,
+            author: input.author || null,
+            publishedAt: input.publishedAt ? new Date(input.publishedAt) : null,
+            points: 0,
+            content: cleanHtml.slice(0, 200000),
+          },
+          update: { content: cleanHtml.slice(0, 200000) },
+        });
+      } catch {
+        // ignore
+      }
+    }
+
     return {
       article,
-      content: { title, html: cleanHtml, publishedTime, url: article.url },
+      content: { title: exTitle, html: cleanHtml, publishedTime, url },
     };
   } catch (err) {
     console.error("[ai] page_reader failed:", err);
@@ -141,23 +244,7 @@ export async function extractArticleContent(
 
 /**
  * Readability-style content extraction.
- *
- * `page_reader` returns the FULL page HTML (head, nav, sidebars, forms,
- * footers, ads, comment sections). Rendering that verbatim buries the article
- * under hundreds of junk elements. This function isolates the real article
- * body and strips non-content chrome so the in-app reader is actually readable.
- *
- * Strategy:
- *  1. Drop <head> entirely.
- *  2. Isolate the main content container — prefer <article>, then <main>,
- *     then [role=main], then common content ids/classes, else full body.
- *  3. Strip non-content block tags (nav, header, aside, footer, form, etc.)
- *     and junk containers (comments, sidebar, related, newsletter, ads…)
- *     using a depth-aware balanced-tag stripper so nesting is handled.
- *  4. Strip inline non-content tags (script, style, meta, link, input, …).
- *  5. Remove empty wrappers and collapse whitespace.
- *  6. If the remaining visible text is too short, return null so the caller
- *     can fall back to the article description + original link.
+ * (unchanged from previous version — isolates article body from full page HTML)
  */
 function extractReadableContent(html: string): string | null {
   if (!html) return null;
@@ -175,7 +262,6 @@ function extractReadableContent(html: string): string | null {
     out;
 
   // 3. Strip non-content BLOCK elements (with their children), depth-aware.
-  //    These wrap nav, headers, sidebars, footers, forms, etc.
   const JUNK_BLOCK_TAGS = [
     "header",
     "nav",
@@ -193,7 +279,6 @@ function extractReadableContent(html: string): string | null {
   for (const tag of JUNK_BLOCK_TAGS) {
     out = stripBlocksByTag(out, tag);
   }
-  // Strip containers whose class/id screams "not article body".
   out = stripBlocksWithAttr(
     out,
     /(comment|sidebar|related|share|social|newsletter|subscribe|advert|banner|widget|popup|modal|cookie|consent|paywall|recommend|trending|popular|breadcrumb|pagination|signup|signin|login|toolbar|action-bar|reading-progress)/i,
@@ -314,7 +399,6 @@ function stripBlocksByTag(html: string, tag: string): string {
     const openIdx = m.index;
     const close = findMatchingClose(html, openIdx, tag);
     if (close === -1) {
-      // unbalanced — drop just the opening tag and continue
       result += html.slice(cursor, openIdx);
       const gt = html.indexOf(">", openIdx);
       cursor = gt === -1 ? html.length : gt + 1;
@@ -368,41 +452,87 @@ export async function chatAboutNews(
   sessionId: string,
   userMessage: string,
 ): Promise<{ reply: string; context: { title: string; url: string }[] }> {
-  // Build context from the most recent articles
-  const recent = await db.article.findMany({
-    orderBy: { publishedAt: "desc" },
-    take: 20,
-  });
-  const ctxBlock = recent
+  // Build context from the most recent articles — prefer DB, fall back to the
+  // in-memory news cache so the chatbot still has grounding on Vercel.
+  let context: { title: string; url: string; description?: string }[] = [];
+  const dbOk = await isDbAvailable();
+  if (dbOk) {
+    try {
+      const recent = await db.article.findMany({
+        orderBy: { publishedAt: "desc" },
+        take: 20,
+        select: { title: true, url: true, description: true },
+      });
+      context = recent.map((a) => ({ title: a.title, url: a.url, description: a.description || undefined }));
+    } catch {
+      // ignore
+    }
+  }
+  if (context.length === 0) {
+    // Fall back to the in-memory news cache (works without a DB).
+    try {
+      const { articles } = await fetchAllNews(false);
+      context = articles.slice(0, 20).map((a) => ({
+        title: a.title,
+        url: a.url,
+        description: a.description || undefined,
+      }));
+    } catch {
+      // ignore
+    }
+  }
+
+  const ctxBlock = context
     .map((a, i) => `[${i + 1}] ${a.title}\n    ${a.description || ""}\n    ${a.url}`)
     .join("\n");
-  const context = recent.map((a) => ({ title: a.title, url: a.url }));
+  const ctxLinks = context.map((a) => ({ title: a.title, url: a.url }));
 
-  // Load recent chat history for this session (cap to last 10 turns)
-  const historyRows = await db.chatMessage.findMany({
-    where: { sessionId },
-    orderBy: { createdAt: "desc" },
-    take: 10,
-  });
-  const history: ChatTurn[] = historyRows
-    .reverse()
-    .map((r) => ({ role: r.role as "user" | "assistant", content: r.content }));
+  // Load recent chat history for this session (cap to last 10 turns).
+  // In-memory fallback when DB unavailable.
+  let history: ChatTurn[] = [];
+  if (dbOk) {
+    try {
+      const historyRows = await db.chatMessage.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      });
+      history = historyRows
+        .reverse()
+        .map((r) => ({ role: r.role as "user" | "assistant", content: r.content }));
+    } catch {
+      // ignore
+    }
+  }
+  // Always include in-memory turns for this session (covers DB-less case).
+  history = [...memoryChatHistory.get(sessionId) || [], ...history].slice(-10);
 
   const messages: any[] = [
     { role: "assistant", content: SYSTEM_NEWS_ASSISTANT },
     {
       role: "assistant",
-      content: `Recent articles context (use these for grounding):\n${ctxBlock}`,
+      content:
+        context.length > 0
+          ? `Recent articles context (use these for grounding):\n${ctxBlock}`
+          : "No recent articles are available right now. Answer generally.",
     },
     ...history,
     { role: "user", content: userMessage },
   ];
 
-  await db.chatMessage.create({ data: { sessionId, role: "user", content: userMessage } });
+  // Record the user's message (in-memory + best-effort DB).
+  pushMemoryChat(sessionId, { role: "user", content: userMessage });
+  if (dbOk) {
+    try {
+      await db.chatMessage.create({ data: { sessionId, role: "user", content: userMessage } });
+    } catch {
+      // ignore
+    }
+  }
 
   let reply = "I couldn't reach the news brain right now. Please try again in a moment.";
   try {
-    const zai = await getZAI();
+    const zai = await createZAI();
     const completion = await zai.chat.completions.create({
       messages,
       thinking: { type: "disabled" },
@@ -412,15 +542,42 @@ export async function chatAboutNews(
     console.error("[ai] chat failed:", err);
   }
 
-  await db.chatMessage.create({ data: { sessionId, role: "assistant", content: reply } });
-  return { reply, context };
+  // Record the assistant's reply (in-memory + best-effort DB).
+  pushMemoryChat(sessionId, { role: "assistant", content: reply });
+  if (dbOk) {
+    try {
+      await db.chatMessage.create({ data: { sessionId, role: "assistant", content: reply } });
+    } catch {
+      // ignore
+    }
+  }
+  return { reply, context: ctxLinks };
+}
+
+/** In-memory chat history fallback (per session, capped at 30 turns). */
+const memoryChatHistory = new Map<string, ChatTurn[]>();
+function pushMemoryChat(sessionId: string, turn: ChatTurn) {
+  const arr = memoryChatHistory.get(sessionId) || [];
+  arr.push(turn);
+  if (arr.length > 30) arr.shift();
+  memoryChatHistory.set(sessionId, arr);
 }
 
 export async function getChatHistory(sessionId: string): Promise<ChatTurn[]> {
-  const rows = await db.chatMessage.findMany({
-    where: { sessionId },
-    orderBy: { createdAt: "asc" },
-    take: 50,
-  });
-  return rows.map((r) => ({ role: r.role as "user" | "assistant", content: r.content }));
+  const dbOk = await isDbAvailable();
+  if (dbOk) {
+    try {
+      const rows = await db.chatMessage.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: "asc" },
+        take: 50,
+      });
+      if (rows.length > 0) {
+        return rows.map((r) => ({ role: r.role as "user" | "assistant", content: r.content }));
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return memoryChatHistory.get(sessionId) || [];
 }

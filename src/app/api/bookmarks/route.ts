@@ -1,59 +1,91 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getOrCreateSessionId } from "@/lib/session";
+import { ArticleDTO } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+/** In-memory bookmark fallback for when the DB is unavailable (Vercel). */
+const memoryBookmarks = new Map<string, ArticleDTO[]>();
+
+async function isDbAvailable(): Promise<boolean> {
+  try {
+    await db.$queryRaw`SELECT 1`;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * GET  /api/bookmarks          — list bookmarks for this session
- * POST /api/bookmarks          { articleId } — add bookmark
- * DELETE /api/bookmarks?id=... — remove bookmark
+ * POST /api/bookmarks          { article: ArticleDTO } — add bookmark
+ * DELETE /api/bookmarks?id=... — remove bookmark by article id
+ *
+ * Self-contained: stores the full article snapshot so it works even when the
+ * Article table is unavailable (Vercel read-only filesystem). Falls back to
+ * an in-memory store when the DB is down (per server instance, non-persistent).
  */
 export async function GET() {
   const sessionId = await getOrCreateSessionId();
-  const rows = await db.bookmark.findMany({
-    where: { sessionId },
-    include: { article: true },
-    orderBy: { createdAt: "desc" },
-  });
+  const dbOk = await isDbAvailable();
+  if (dbOk) {
+    try {
+      const rows = await db.bookmark.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: "desc" },
+      });
+      const bookmarks = rows
+        .map((r) => {
+          try {
+            return JSON.parse(r.data) as ArticleDTO;
+          } catch {
+            return null;
+          }
+        })
+        .filter((b): b is ArticleDTO => b !== null);
+      return NextResponse.json({ success: true, sessionId, bookmarks });
+    } catch (err) {
+      console.error("[api/bookmarks GET] db error, using memory:", err);
+    }
+  }
   return NextResponse.json({
     success: true,
     sessionId,
-    bookmarks: rows.map((b) => ({
-      id: b.id,
-      createdAt: b.createdAt,
-      article: {
-        id: b.article.id,
-        source: b.article.source,
-        sourceId: b.article.sourceId,
-        category: b.article.category,
-        title: b.article.title,
-        description: b.article.description,
-        url: b.article.url,
-        image: b.article.image,
-        author: b.article.author,
-        publishedAt: b.article.publishedAt,
-        aiSummary: b.article.aiSummary,
-        aiTags: b.article.aiTags,
-        points: b.article.points,
-      },
-    })),
+    bookmarks: memoryBookmarks.get(sessionId) || [],
   });
 }
 
 export async function POST(req: Request) {
   try {
     const sessionId = await getOrCreateSessionId();
-    const { articleId } = await req.json();
-    if (!articleId) {
-      return NextResponse.json({ success: false, error: "articleId required" }, { status: 400 });
+    const { article } = await req.json();
+    if (!article || !article.id) {
+      return NextResponse.json({ success: false, error: "article required" }, { status: 400 });
     }
-    const bookmark = await db.bookmark.upsert({
-      where: { sessionId_articleId: { sessionId, articleId } },
-      create: { sessionId, articleId },
-      update: {},
-    });
-    return NextResponse.json({ success: true, bookmark });
+    const dbOk = await isDbAvailable();
+    if (dbOk) {
+      try {
+        await db.bookmark.upsert({
+          where: { sessionId_articleKey: { sessionId, articleKey: article.id } },
+          create: {
+            sessionId,
+            articleKey: article.id,
+            data: JSON.stringify(article),
+          },
+          update: { data: JSON.stringify(article) },
+        });
+        return NextResponse.json({ success: true });
+      } catch (err) {
+        console.error("[api/bookmarks POST] db error, using memory:", err);
+      }
+    }
+    // In-memory fallback
+    const arr = memoryBookmarks.get(sessionId) || [];
+    const idx = arr.findIndex((a) => a.id === article.id);
+    if (idx === -1) arr.unshift(article);
+    memoryBookmarks.set(sessionId, arr);
+    return NextResponse.json({ success: true });
   } catch (err: any) {
     console.error("[api/bookmarks POST] error:", err);
     return NextResponse.json(
@@ -71,7 +103,23 @@ export async function DELETE(req: Request) {
     if (!articleId) {
       return NextResponse.json({ success: false, error: "id required" }, { status: 400 });
     }
-    await db.bookmark.deleteMany({ where: { sessionId, articleId } });
+    const dbOk = await isDbAvailable();
+    if (dbOk) {
+      try {
+        await db.bookmark.deleteMany({
+          where: { sessionId, articleKey: articleId },
+        });
+        return NextResponse.json({ success: true });
+      } catch (err) {
+        console.error("[api/bookmarks DELETE] db error, using memory:", err);
+      }
+    }
+    // In-memory fallback
+    const arr = memoryBookmarks.get(sessionId) || [];
+    memoryBookmarks.set(
+      sessionId,
+      arr.filter((a) => a.id !== articleId),
+    );
     return NextResponse.json({ success: true });
   } catch (err: any) {
     console.error("[api/bookmarks DELETE] error:", err);
