@@ -25,6 +25,8 @@ export interface RawArticle {
   author?: string | null;
   publishedAt?: string | null;
   points?: number;
+  /** Category hint used when persisting (e.g. "ai", "tech", "devto", "hackernews"). */
+  category?: string;
 }
 
 export interface ArticleDTO {
@@ -113,8 +115,7 @@ async function fetchDevTo(): Promise<RawArticle[]> {
         author: item.user?.name ?? null,
         publishedAt: item.published_at ?? null,
         points: item.public_reactions_count ?? 0,
-        // @ts-expect-error tag is a hint stored alongside
-        _categoryHint: tag,
+        category: tag,
       });
     }
   }
@@ -142,8 +143,7 @@ async function fetchHackerNews(): Promise<RawArticle[]> {
       author: h.author ?? null,
       publishedAt: h.created_at ?? null,
       points: h.points ?? 0,
-      // @ts-expect-error hint
-      _categoryHint: "hackernews",
+      category: "hackernews",
     }));
 }
 
@@ -180,8 +180,7 @@ async function fetchWebNews(query: string, category: string): Promise<RawArticle
         author: r.host_name ?? null,
         publishedAt: r.date || null,
         points: 0,
-        // @ts-expect-error hint
-        _categoryHint: category,
+        category,
       }));
   } catch (err) {
     console.error("[news] web_search failed:", err);
@@ -196,8 +195,7 @@ async function persist(raw: RawArticle[]): Promise<ArticleDTO[]> {
   const dtos: ArticleDTO[] = [];
   for (const r of raw) {
     if (!r.title || !r.url) continue;
-    // @ts-expect-error category hint attached at fetch time
-    const category: string = r._categoryHint || r.source;
+    const category: string = r.category || r.source;
     const pub = r.publishedAt ? new Date(r.publishedAt) : null;
     const pubValid = pub && !isNaN(pub.getTime()) ? pub : null;
     try {

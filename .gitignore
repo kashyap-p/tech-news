@@ -52,3 +52,14 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# SQLite database (runtime data, not source)
+db/*.db
+db/*.db-journal
+db/*.db-wal
+db/*.db-shm
+
+# Runtime artifacts
+/download/
+/upload/
+/worklog.md

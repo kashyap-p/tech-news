@@ -4,7 +4,6 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Bot, Send, Sparkles, X, Loader2, MessageSquare, Trash2 } from "lucide-react";
 import { ChatTurn } from "@/lib/types";
@@ -27,7 +26,12 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [context, setContext] = useState<{ title: string; url: string }[]>([]);
+  // Ref to the REAL scrollable element (the native overflow-y-auto div).
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Ref to the panel root — we lock wheel events at this level so wheeling
+  // ANYWHERE inside the chat (header, messages, input) never scrolls the page.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -37,7 +41,7 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
         setMessages(data.history);
       }
     } catch {
-      // ignore
+      // ignore — non-critical
     }
   }, []);
 
@@ -45,11 +49,55 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
     if (open && messages.length === 0) loadHistory();
   }, [open, loadHistory, messages.length]);
 
+  // Auto-scroll to the latest message / loading indicator.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    const el = scrollRef.current;
+    if (!el) return;
+    // requestAnimationFrame ensures new content has laid out before we scroll.
+    const id = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(id);
   }, [messages, loading]);
+
+  // Escape closes the panel; focus the input when opened.
+  useEffect(() => {
+    if (!open) return;
+    inputRef.current?.focus();
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onOpenChange(false);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onOpenChange]);
+
+  // Lock wheel scrolling to the chat viewport.
+  // The panel is `position: fixed` over a scrollable page; without this, some
+  // browsers redirect wheel events to the document and the page scrolls
+  // instead of the chat. We attach a NON-passive listener to the whole panel
+  // so wheeling anywhere inside the chat never reaches the page. If the event
+  // is over the scroll region we scroll it (clamped); otherwise we just swallow
+  // the event so the page stays put.
+  useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    const scroll = scrollRef.current;
+    if (!panel) return;
+    function onWheel(e: WheelEvent) {
+      if (scroll && scroll.contains(e.target as Node)) {
+        const max = scroll.scrollHeight - scroll.clientHeight;
+        scroll.scrollTop = Math.max(0, Math.min(max, scroll.scrollTop + e.deltaY));
+      }
+      // Always swallow the event so the page NEVER scrolls while chat is open.
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    panel.addEventListener("wheel", onWheel, { passive: false });
+    return () => panel.removeEventListener("wheel", onWheel);
+  }, [open]);
 
   async function send(text?: string) {
     const message = (text ?? input).trim();
@@ -93,14 +141,18 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
     <AnimatePresence>
       {open && (
         <motion.div
+          ref={panelRef}
           initial={{ opacity: 0, x: 40, scale: 0.96 }}
           animate={{ opacity: 1, x: 0, scale: 1 }}
           exit={{ opacity: 0, x: 40, scale: 0.96 }}
           transition={{ type: "spring", stiffness: 260, damping: 26 }}
-          className="fixed bottom-4 right-4 z-50 flex h-[80vh] w-[calc(100vw-2rem)] max-w-md flex-col overflow-hidden rounded-2xl border border-border bg-card/95 shadow-2xl backdrop-blur-xl sm:bottom-6 sm:right-6"
+          role="dialog"
+          aria-label="Pulse AI news assistant"
+          aria-modal="true"
+          className="fixed bottom-4 right-4 z-50 flex h-[85vh] w-[calc(100vw-2rem)] max-w-md flex-col overflow-hidden rounded-2xl border border-border bg-card/95 shadow-2xl backdrop-blur-xl sm:bottom-6 sm:right-6"
         >
           {/* Header */}
-          <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-pink-500/10 via-purple-500/10 to-cyan-500/10 px-4 py-3">
+          <div className="flex flex-shrink-0 items-center justify-between border-b border-border bg-gradient-to-r from-pink-500/10 via-purple-500/10 to-cyan-500/10 px-4 py-3">
             <div className="flex items-center gap-2.5">
               <div className="tn-breathe flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-pink-500 to-blue-500 text-white">
                 <Bot className="h-5 w-5" />
@@ -129,8 +181,18 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
             </Button>
           </div>
 
-          {/* Messages */}
-          <ScrollArea className="flex-1" ref={scrollRef as any}>
+          {/*
+            Messages scroll container.
+            CRITICAL: `min-h-0` + `flex-1` + `overflow-y-auto` makes this a real
+            bounded scroll region. Without `min-h-0`, a flex item's min-height
+            defaults to `auto` (content size) and the container grows instead of
+            scrolling — which is exactly the page-scroll-instead-of-chat bug.
+            `overscroll-contain` stops wheel/touch scroll chaining to the page.
+          */}
+          <div
+            ref={scrollRef}
+            className="tn-scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          >
             <div className="space-y-4 p-4">
               {messages.length === 0 && (
                 <div className="space-y-4 py-6 text-center">
@@ -140,7 +202,7 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
                   <div>
                     <p className="text-sm font-semibold">Ask Pulse about the news</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      I&apos;m grounded on the latest tech & AI stories. Try a question:
+                      I&apos;m grounded on the latest tech &amp; AI stories. Try a question:
                     </p>
                   </div>
                   <div className="flex flex-col gap-2">
@@ -200,15 +262,17 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
                 <div className="flex justify-start">
                   <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-border bg-secondary/60 px-3.5 py-2.5">
                     <Loader2 className="h-4 w-4 animate-spin text-purple-400" />
-                    <span className="text-xs text-muted-foreground">Pulse is reading the news…</span>
+                    <span className="text-xs text-muted-foreground">
+                      Pulse is reading the news…
+                    </span>
                   </div>
                 </div>
               )}
             </div>
-          </ScrollArea>
+          </div>
 
           {/* Input */}
-          <div className="border-t border-border p-3">
+          <div className="flex-shrink-0 border-t border-border p-3">
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -217,12 +281,14 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
               className="flex items-center gap-2"
             >
               <Input
+                ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Ask about AI, tech, a topic…"
                 disabled={loading}
                 className="h-9 flex-1 bg-secondary/40"
                 maxLength={2000}
+                autoComplete="off"
               />
               <Button
                 type="submit"
