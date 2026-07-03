@@ -1,0 +1,78 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Cached news article fetched from Dev.to / Hacker News / Web Search.
+model Article {
+  id          String   @id @default(cuid())
+  /// Stable source id (e.g. devto:12345, hn:67890, web:<sha8>)
+  sourceId    String   @unique
+  source      String   // "devto" | "hackernews" | "web"
+  category    String   @default("tech") // "ai" | "tech" | "devto" | "hackernews" | "web"
+  title       String
+  description String   @default("")
+  url         String
+  image       String?
+  author      String?
+  /// ISO timestamp of the original article publish time
+  publishedAt DateTime?
+  /// AI-generated short summary (lazy populated)
+  aiSummary   String?
+  /// AI-suggested tags (comma separated)
+  aiTags      String?
+  /// Full extracted HTML content for the in-app reader (lazy populated)
+  content     String?
+  points      Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  bookmarks   Bookmark[]
+  shares      ShareEvent[]
+
+  @@index([source])
+  @@index([category])
+  @@index([publishedAt])
+}
+
+/// Session-based bookmark (no auth required for this portfolio project).
+model Bookmark {
+  id        String   @id @default(cuid())
+  sessionId String
+  articleId String
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([sessionId, articleId])
+  @@index([sessionId])
+}
+
+/// Tracks share events for analytics.
+model ShareEvent {
+  id        String   @id @default(cuid())
+  sessionId String
+  articleId String
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  channel   String   // "copy" | "native" | "twitter" | "linkedin" | "facebook" | "reddit"
+  createdAt DateTime @default(now())
+
+  @@index([articleId])
+}
+
+/// Lightweight chatbot conversation log (session based, capped length).
+model ChatMessage {
+  id        String   @id @default(cuid())
+  sessionId String
+  role      String   // "user" | "assistant"
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+}

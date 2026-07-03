@@ -1,0 +1,1141 @@
+     1→---
+     2→name: web-reader
+     3→description: Implement web page content extraction capabilities using the z-ai-web-dev-sdk. Use this skill when the user needs to scrape web pages, extract article content, retrieve page metadata, or build applications that process web content. Supports automatic content extraction with title, HTML, and publication time retrieval.
+     4→license: MIT
+     5→---
+     6→
+     7→# Web Reader Skill
+     8→
+     9→This skill guides the implementation of web page reading and content extraction functionality using the z-ai-web-dev-sdk package, enabling applications to fetch and process web page content programmatically.
+    10→
+    11→## Skills Path
+    12→
+    13→**Skill Location**: `{project_path}/skills/web-reader`
+    14→
+    15→This skill is located at the above path in your project.
+    16→
+    17→**Reference Scripts**: Example test scripts are available in the `{Skill Location}/scripts/` directory for quick testing and reference. See `{Skill Location}/scripts/web-reader.ts` for a working example.
+    18→
+    19→## Overview
+    20→
+    21→Web Reader allows you to build applications that can extract content from web pages, retrieve article metadata, and process HTML content. The API automatically handles content extraction, providing clean, structured data from any web URL.
+    22→
+    23→**IMPORTANT**: z-ai-web-dev-sdk MUST be used in backend code only. Never use it in client-side code.
+    24→
+    25→## Prerequisites
+    26→
+    27→The z-ai-web-dev-sdk package is already installed. Import it as shown in the examples below.
+    28→
+    29→## CLI Usage (For Simple Tasks)
+    30→
+    31→For simple web page content extraction, you can use the z-ai CLI instead of writing code. This is ideal for quick content scraping, testing URLs, or simple automation tasks.
+    32→
+    33→### Basic Page Reading
+    34→
+    35→```bash
+    36→# Extract content from a web page
+    37→z-ai function --name "page_reader" --args '{"url": "https://example.com"}'
+    38→
+    39→# Using short options
+    40→z-ai function -n page_reader -a '{"url": "https://www.example.com/article"}'
+    41→```
+    42→
+    43→### Save Page Content
+    44→
+    45→```bash
+    46→# Save extracted content to JSON file
+    47→z-ai function \
+    48→  -n page_reader \
+    49→  -a '{"url": "https://news.example.com/article"}' \
+    50→  -o page_content.json
+    51→
+    52→# Extract and save blog post
+    53→z-ai function \
+    54→  -n page_reader \
+    55→  -a '{"url": "https://blog.example.com/post/123"}' \
+    56→  -o blog_post.json
+    57→```
+    58→
+    59→### Common Use Cases
+    60→
+    61→```bash
+    62→# Extract news article
+    63→z-ai function \
+    64→  -n page_reader \
+    65→  -a '{"url": "https://news.site.com/breaking-news"}' \
+    66→  -o news.json
+    67→
+    68→# Read documentation page
+    69→z-ai function \
+    70→  -n page_reader \
+    71→  -a '{"url": "https://docs.example.com/getting-started"}' \
+    72→  -o docs.json
+    73→
+    74→# Scrape blog content
+    75→z-ai function \
+    76→  -n page_reader \
+    77→  -a '{"url": "https://techblog.com/ai-trends-2024"}' \
+    78→  -o blog.json
+    79→
+    80→# Extract research article
+    81→z-ai function \
+    82→  -n page_reader \
+    83→  -a '{"url": "https://research.org/papers/quantum-computing"}' \
+    84→  -o research.json
+    85→```
+    86→
+    87→### CLI Parameters
+    88→
+    89→- `--name, -n`: **Required** - Function name (use "page_reader")
+    90→- `--args, -a`: **Required** - JSON arguments object with:
+    91→  - `url` (string, required): The URL of the web page to read
+    92→- `--output, -o <path>`: Optional - Output file path (JSON format)
+    93→
+    94→### Response Structure
+    95→
+    96→The CLI returns a JSON object containing:
+    97→- `title`: Page title
+    98→- `html`: Main content HTML
+    99→- `text`: Plain text content
+   100→- `publish_time`: Publication timestamp (if available)
+   101→- `url`: Original URL
+   102→- `metadata`: Additional page metadata
+   103→
+   104→### Example Response
+   105→
+   106→```json
+   107→{
+   108→  "title": "Introduction to Machine Learning",
+   109→  "html": "<article><h1>Introduction to Machine Learning</h1><p>Machine learning is...</p></article>",
+   110→  "text": "Introduction to Machine Learning\n\nMachine learning is...",
+   111→  "publish_time": "2024-01-15T10:30:00Z",
+   112→  "url": "https://example.com/ml-intro",
+   113→  "metadata": {
+   114→    "author": "John Doe",
+   115→    "description": "A comprehensive guide to ML"
+   116→  }
+   117→}
+   118→```
+   119→
+   120→### Processing Multiple URLs
+   121→
+   122→```bash
+   123→# Create a simple script to process multiple URLs
+   124→for url in \
+   125→  "https://site1.com/article1" \
+   126→  "https://site2.com/article2" \
+   127→  "https://site3.com/article3"
+   128→do
+   129→  filename=$(echo $url | md5sum | cut -d' ' -f1)
+   130→  z-ai function -n page_reader -a "{\"url\": \"$url\"}" -o "${filename}.json"
+   131→done
+   132→```
+   133→
+   134→### When to Use CLI vs SDK
+   135→
+   136→**Use CLI for:**
+   137→- Quick content extraction
+   138→- Testing URL accessibility
+   139→- Simple web scraping tasks
+   140→- One-off content retrieval
+   141→
+   142→**Use SDK for:**
+   143→- Batch URL processing with custom logic
+   144→- Integration with web applications
+   145→- Complex content processing pipelines
+   146→- Production applications with error handling
+   147→
+   148→## How It Works
+   149→
+   150→The Web Reader uses the `page_reader` function to:
+   151→1. Fetch the web page content
+   152→2. Extract main article content and metadata
+   153→3. Parse and clean the HTML
+   154→4. Return structured data including title, content, and publication time
+   155→
+   156→## Basic Web Reading Implementation
+   157→
+   158→### Simple Page Reading
+   159→
+   160→```javascript
+   161→import ZAI from 'z-ai-web-dev-sdk';
+   162→
+   163→async function readWebPage(url) {
+   164→  try {
+   165→    const zai = await ZAI.create();
+   166→
+   167→    const result = await zai.functions.invoke('page_reader', {
+   168→      url: url
+   169→    });
+   170→
+   171→    console.log('Title:', result.data.title);
+   172→    console.log('URL:', result.data.url);
+   173→    console.log('Published:', result.data.publishedTime);
+   174→    console.log('HTML Content:', result.data.html);
+   175→    console.log('Tokens Used:', result.data.usage.tokens);
+   176→
+   177→    return result.data;
+   178→  } catch (error) {
+   179→    console.error('Page reading failed:', error.message);
+   180→    throw error;
+   181→  }
+   182→}
+   183→
+   184→// Usage
+   185→const pageData = await readWebPage('https://example.com/article');
+   186→console.log('Page title:', pageData.title);
+   187→```
+   188→
+   189→### Extract Article Text Only
+   190→
+   191→```javascript
+   192→import ZAI from 'z-ai-web-dev-sdk';
+   193→
+   194→async function extractArticleText(url) {
+   195→  const zai = await ZAI.create();
+   196→
+   197→  const result = await zai.functions.invoke('page_reader', {
+   198→    url: url
+   199→  });
+   200→
+   201→  // Convert HTML to plain text (basic approach)
+   202→  const plainText = result.data.html
+   203→    .replace(/<[^>]*>/g, ' ')
+   204→    .replace(/\s+/g, ' ')
+   205→    .trim();
+   206→
+   207→  return {
+   208→    title: result.data.title,
+   209→    text: plainText,
+   210→    url: result.data.url,
+   211→    publishedTime: result.data.publishedTime
+   212→  };
+   213→}
+   214→
+   215→// Usage
+   216→const article = await extractArticleText('https://news.example.com/story');
+   217→console.log(article.title);
+   218→console.log(article.text.substring(0, 200) + '...');
+   219→```
+   220→
+   221→### Read Multiple Pages
+   222→
+   223→```javascript
+   224→import ZAI from 'z-ai-web-dev-sdk';
+   225→
+   226→async function readMultiplePages(urls) {
+   227→  const zai = await ZAI.create();
+   228→  const results = [];
+   229→
+   230→  for (const url of urls) {
+   231→    try {
+   232→      const result = await zai.functions.invoke('page_reader', {
+   233→        url: url
+   234→      });
+   235→
+   236→      results.push({
+   237→        url: url,
+   238→        success: true,
+   239→        data: result.data
+   240→      });
+   241→    } catch (error) {
+   242→      results.push({
+   243→        url: url,
+   244→        success: false,
+   245→        error: error.message
+   246→      });
+   247→    }
+   248→  }
+   249→
+   250→  return results;
+   251→}
+   252→
+   253→// Usage
+   254→const urls = [
+   255→  'https://example.com/article1',
+   256→  'https://example.com/article2',
+   257→  'https://example.com/article3'
+   258→];
+   259→
+   260→const pages = await readMultiplePages(urls);
+   261→pages.forEach(page => {
+   262→  if (page.success) {
+   263→    console.log(`✓ ${page.data.title}`);
+   264→  } else {
+   265→    console.log(`✗ ${page.url}: ${page.error}`);
+   266→  }
+   267→});
+   268→```
+   269→
+   270→## Advanced Use Cases
+   271→
+   272→### Web Content Analyzer
+   273→
+   274→```javascript
+   275→import ZAI from 'z-ai-web-dev-sdk';
+   276→
+   277→class WebContentAnalyzer {
+   278→  constructor() {
+   279→    this.cache = new Map();
+   280→  }
+   281→
+   282→  async initialize() {
+   283→    this.zai = await ZAI.create();
+   284→  }
+   285→
+   286→  async readPage(url, useCache = true) {
+   287→    // Check cache
+   288→    if (useCache && this.cache.has(url)) {
+   289→      console.log('Returning cached result for:', url);
+   290→      return this.cache.get(url);
+   291→    }
+   292→
+   293→    // Fetch fresh content
+   294→    const result = await this.zai.functions.invoke('page_reader', {
+   295→      url: url
+   296→    });
+   297→
+   298→    // Cache the result
+   299→    if (useCache) {
+   300→      this.cache.set(url, result.data);
+   301→    }
+   302→
+   303→    return result.data;
+   304→  }
+   305→
+   306→  async getPageMetadata(url) {
+   307→    const data = await this.readPage(url);
+   308→
+   309→    return {
+   310→      title: data.title,
+   311→      url: data.url,
+   312→      publishedTime: data.publishedTime,
+   313→      contentLength: data.html.length,
+   314→      wordCount: this.estimateWordCount(data.html)
+   315→    };
+   316→  }
+   317→
+   318→  estimateWordCount(html) {
+   319→    const text = html.replace(/<[^>]*>/g, ' ');
+   320→    const words = text.split(/\s+/).filter(word => word.length > 0);
+   321→    return words.length;
+   322→  }
+   323→
+   324→  async comparePages(url1, url2) {
+   325→    const [page1, page2] = await Promise.all([
+   326→      this.readPage(url1),
+   327→      this.readPage(url2)
+   328→    ]);
+   329→
+   330→    return {
+   331→      page1: {
+   332→        title: page1.title,
+   333→        wordCount: this.estimateWordCount(page1.html),
+   334→        published: page1.publishedTime
+   335→      },
+   336→      page2: {
+   337→        title: page2.title,
+   338→        wordCount: this.estimateWordCount(page2.html),
+   339→        published: page2.publishedTime
+   340→      }
+   341→    };
+   342→  }
+   343→
+   344→  clearCache() {
+   345→    this.cache.clear();
+   346→  }
+   347→}
+   348→
+   349→// Usage
+   350→const analyzer = new WebContentAnalyzer();
+   351→await analyzer.initialize();
+   352→
+   353→const metadata = await analyzer.getPageMetadata('https://example.com/article');
+   354→console.log('Article Metadata:', metadata);
+   355→
+   356→const comparison = await analyzer.comparePages(
+   357→  'https://example.com/article1',
+   358→  'https://example.com/article2'
+   359→);
+   360→console.log('Comparison:', comparison);
+   361→```
+   362→
+   363→### RSS Feed Reader
+   364→
+   365→```javascript
+   366→import ZAI from 'z-ai-web-dev-sdk';
+   367→
+   368→class FeedReader {
+   369→  constructor() {
+   370→    this.articles = [];
+   371→  }
+   372→
+   373→  async initialize() {
+   374→    this.zai = await ZAI.create();
+   375→  }
+   376→
+   377→  async fetchArticlesFromUrls(urls) {
+   378→    const articles = [];
+   379→
+   380→    for (const url of urls) {
+   381→      try {
+   382→        const result = await this.zai.functions.invoke('page_reader', {
+   383→          url: url
+   384→        });
+   385→
+   386→        articles.push({
+   387→          title: result.data.title,
+   388→          url: result.data.url,
+   389→          publishedTime: result.data.publishedTime,
+   390→          content: result.data.html,
+   391→          fetchedAt: new Date().toISOString()
+   392→        });
+   393→
+   394→        console.log(`Fetched: ${result.data.title}`);
+   395→      } catch (error) {
+   396→        console.error(`Failed to fetch ${url}:`, error.message);
+   397→      }
+   398→    }
+   399→
+   400→    this.articles = articles;
+   401→    return articles;
+   402→  }
+   403→
+   404→  getRecentArticles(limit = 10) {
+   405→    return this.articles
+   406→      .sort((a, b) => {
+   407→        const dateA = new Date(a.publishedTime || a.fetchedAt);
+   408→        const dateB = new Date(b.publishedTime || b.fetchedAt);
+   409→        return dateB - dateA;
+   410→      })
+   411→      .slice(0, limit);
+   412→  }
+   413→
+   414→  searchArticles(keyword) {
+   415→    return this.articles.filter(article => {
+   416→      const searchText = `${article.title} ${article.content}`.toLowerCase();
+   417→      return searchText.includes(keyword.toLowerCase());
+   418→    });
+   419→  }
+   420→}
+   421→
+   422→// Usage
+   423→const reader = new FeedReader();
+   424→await reader.initialize();
+   425→
+   426→const feedUrls = [
+   427→  'https://example.com/article1',
+   428→  'https://example.com/article2',
+   429→  'https://example.com/article3'
+   430→];
+   431→
+   432→await reader.fetchArticlesFromUrls(feedUrls);
+   433→const recent = reader.getRecentArticles(5);
+   434→console.log('Recent articles:', recent.map(a => a.title));
+   435→```
+   436→
+   437→### Content Aggregator
+   438→
+   439→```javascript
+   440→import ZAI from 'z-ai-web-dev-sdk';
+   441→
+   442→async function aggregateContent(urls, options = {}) {
+   443→  const zai = await ZAI.create();
+   444→  const aggregated = {
+   445→    sources: [],
+   446→    totalWords: 0,
+   447→    aggregatedAt: new Date().toISOString()
+   448→  };
+   449→
+   450→  for (const url of urls) {
+   451→    try {
+   452→      const result = await zai.functions.invoke('page_reader', {
+   453→        url: url
+   454→      });
+   455→
+   456→      const text = result.data.html.replace(/<[^>]*>/g, ' ');
+   457→      const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
+   458→
+   459→      aggregated.sources.push({
+   460→        title: result.data.title,
+   461→        url: result.data.url,
+   462→        publishedTime: result.data.publishedTime,
+   463→        wordCount: wordCount,
+   464→        excerpt: text.substring(0, 200).trim() + '...'
+   465→      });
+   466→
+   467→      aggregated.totalWords += wordCount;
+   468→
+   469→      if (options.delay) {
+   470→        await new Promise(resolve => setTimeout(resolve, options.delay));
+   471→      }
+   472→    } catch (error) {
+   473→      console.error(`Failed to fetch ${url}:`, error.message);
+   474→    }
+   475→  }
+   476→
+   477→  return aggregated;
+   478→}
+   479→
+   480→// Usage
+   481→const sources = [
+   482→  'https://example.com/news1',
+   483→  'https://example.com/news2',
+   484→  'https://example.com/news3'
+   485→];
+   486→
+   487→const aggregated = await aggregateContent(sources, { delay: 1000 });
+   488→console.log(`Aggregated ${aggregated.sources.length} sources`);
+   489→console.log(`Total words: ${aggregated.totalWords}`);
+   490→```
+   491→
+   492→### Web Scraping Pipeline
+   493→
+   494→```javascript
+   495→import ZAI from 'z-ai-web-dev-sdk';
+   496→
+   497→class ScrapingPipeline {
+   498→  constructor() {
+   499→    this.processors = [];
+   500→  }
+   501→
+   502→  async initialize() {
+   503→    this.zai = await ZAI.create();
+   504→  }
+   505→
+   506→  addProcessor(name, processorFn) {
+   507→    this.processors.push({ name, fn: processorFn });
+   508→  }
+   509→
+   510→  async scrape(url) {
+   511→    // Fetch the page
+   512→    const result = await this.zai.functions.invoke('page_reader', {
+   513→      url: url
+   514→    });
+   515→
+   516→    let data = {
+   517→      raw: result.data,
+   518→      processed: {}
+   519→    };
+   520→
+   521→    // Run through processors
+   522→    for (const processor of this.processors) {
+   523→      try {
+   524→        data.processed[processor.name] = await processor.fn(data.raw);
+   525→        console.log(`✓ Processed with ${processor.name}`);
+   526→      } catch (error) {
+   527→        console.error(`✗ Failed ${processor.name}:`, error.message);
+   528→        data.processed[processor.name] = null;
+   529→      }
+   530→    }
+   531→
+   532→    return data;
+   533→  }
+   534→}
+   535→
+   536→// Processor functions
+   537→function extractLinks(pageData) {
+   538→  const linkRegex = /href=["'](https?:\/\/[^"']+)["']/g;
+   539→  const links = [];
+   540→  let match;
+   541→
+   542→  while ((match = linkRegex.exec(pageData.html)) !== null) {
+   543→    links.push(match[1]);
+   544→  }
+   545→
+   546→  return [...new Set(links)]; // Remove duplicates
+   547→}
+   548→
+   549→function extractImages(pageData) {
+   550→  const imgRegex = /src=["'](https?:\/\/[^"']+\.(jpg|jpeg|png|gif|webp))["']/gi;
+   551→  const images = [];
+   552→  let match;
+   553→
+   554→  while ((match = imgRegex.exec(pageData.html)) !== null) {
+   555→    images.push(match[1]);
+   556→  }
+   557→
+   558→  return [...new Set(images)];
+   559→}
+   560→
+   561→function extractPlainText(pageData) {
+   562→  return pageData.html
+   563→    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+   564→    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+   565→    .replace(/<[^>]*>/g, ' ')
+   566→    .replace(/\s+/g, ' ')
+   567→    .trim();
+   568→}
+   569→
+   570→// Usage
+   571→const pipeline = new ScrapingPipeline();
+   572→await pipeline.initialize();
+   573→
+   574→pipeline.addProcessor('links', extractLinks);
+   575→pipeline.addProcessor('images', extractImages);
+   576→pipeline.addProcessor('plainText', extractPlainText);
+   577→
+   578→const result = await pipeline.scrape('https://example.com/article');
+   579→console.log('Links found:', result.processed.links.length);
+   580→console.log('Images found:', result.processed.images.length);
+   581→console.log('Text length:', result.processed.plainText.length);
+   582→```
+   583→
+   584→## Response Format
+   585→
+   586→### Successful Response
+   587→
+   588→```typescript
+   589→{
+   590→  code: 200,
+   591→  status: 200,
+   592→  data: {
+   593→    title: "Article Title",
+   594→    url: "https://example.com/article",
+   595→    html: "<div>Article content...</div>",
+   596→    publishedTime: "2025-01-15T10:30:00Z",
+   597→    usage: {
+   598→      tokens: 1500
+   599→    }
+   600→  },
+   601→  meta: {
+   602→    usage: {
+   603→      tokens: 1500
+   604→    }
+   605→  }
+   606→}
+   607→```
+   608→
+   609→### Response Fields
+   610→
+   611→| Field | Type | Description |
+   612→|-------|------|-------------|
+   613→| `code` | number | Response status code |
+   614→| `status` | number | HTTP status code |
+   615→| `data.title` | string | Page title |
+   616→| `data.url` | string | Page URL |
+   617→| `data.html` | string | Extracted HTML content |
+   618→| `data.publishedTime` | string | Publication date (optional) |
+   619→| `data.usage.tokens` | number | Tokens used for processing |
+   620→| `meta.usage.tokens` | number | Total tokens used |
+   621→
+   622→## Best Practices
+   623→
+   624→### 1. Error Handling
+   625→
+   626→```javascript
+   627→async function safeReadPage(url) {
+   628→  try {
+   629→    const zai = await ZAI.create();
+   630→
+   631→    // Validate URL
+   632→    if (!url || !url.startsWith('http')) {
+   633→      throw new Error('Invalid URL format');
+   634→    }
+   635→
+   636→    const result = await zai.functions.invoke('page_reader', {
+   637→      url: url
+   638→    });
+   639→
+   640→    // Check response status
+   641→    if (result.code !== 200) {
+   642→      throw new Error(`Failed to fetch page: ${result.code}`);
+   643→    }
+   644→
+   645→    // Verify essential data
+   646→    if (!result.data.html || !result.data.title) {
+   647→      throw new Error('Incomplete page data received');
+   648→    }
+   649→
+   650→    return {
+   651→      success: true,
+   652→      data: result.data
+   653→    };
+   654→  } catch (error) {
+   655→    console.error('Page reading error:', error);
+   656→    return {
+   657→      success: false,
+   658→      error: error.message
+   659→    };
+   660→  }
+   661→}
+   662→```
+   663→
+   664→### 2. Rate Limiting
+   665→
+   666→```javascript
+   667→class RateLimitedReader {
+   668→  constructor(requestsPerMinute = 10) {
+   669→    this.requestsPerMinute = requestsPerMinute;
+   670→    this.requestTimes = [];
+   671→  }
+   672→
+   673→  async initialize() {
+   674→    this.zai = await ZAI.create();
+   675→  }
+   676→
+   677→  async readPage(url) {
+   678→    await this.waitForRateLimit();
+   679→
+   680→    const result = await this.zai.functions.invoke('page_reader', {
+   681→      url: url
+   682→    });
+   683→
+   684→    this.requestTimes.push(Date.now());
+   685→    return result.data;
+   686→  }
+   687→
+   688→  async waitForRateLimit() {
+   689→    const now = Date.now();
+   690→    const oneMinuteAgo = now - 60000;
+   691→
+   692→    // Remove old timestamps
+   693→    this.requestTimes = this.requestTimes.filter(time => time > oneMinuteAgo);
+   694→
+   695→    // Check if we need to wait
+   696→    if (this.requestTimes.length >= this.requestsPerMinute) {
+   697→      const oldestRequest = this.requestTimes[0];
+   698→      const waitTime = 60000 - (now - oldestRequest);
+   699→
+   700→      if (waitTime > 0) {
+   701→        console.log(`Rate limit reached. Waiting ${waitTime}ms...`);
+   702→        await new Promise(resolve => setTimeout(resolve, waitTime));
+   703→      }
+   704→    }
+   705→  }
+   706→}
+   707→
+   708→// Usage
+   709→const reader = new RateLimitedReader(10); // 10 requests per minute
+   710→await reader.initialize();
+   711→
+   712→const urls = ['https://example.com/1', 'https://example.com/2'];
+   713→for (const url of urls) {
+   714→  const data = await reader.readPage(url);
+   715→  console.log('Fetched:', data.title);
+   716→}
+   717→```
+   718→
+   719→### 3. Caching Strategy
+   720→
+   721→```javascript
+   722→import ZAI from 'z-ai-web-dev-sdk';
+   723→
+   724→class CachedWebReader {
+   725→  constructor(cacheDuration = 3600000) { // 1 hour default
+   726→    this.cache = new Map();
+   727→    this.cacheDuration = cacheDuration;
+   728→  }
+   729→
+   730→  async initialize() {
+   731→    this.zai = await ZAI.create();
+   732→  }
+   733→
+   734→  async readPage(url, forceRefresh = false) {
+   735→    const cacheKey = url;
+   736→    const cached = this.cache.get(cacheKey);
+   737→
+   738→    // Return cached if valid and not forcing refresh
+   739→    if (cached && !forceRefresh) {
+   740→      const age = Date.now() - cached.timestamp;
+   741→      if (age < this.cacheDuration) {
+   742→        console.log('Returning cached content for:', url);
+   743→        return cached.data;
+   744→      }
+   745→    }
+   746→
+   747→    // Fetch fresh content
+   748→    const result = await this.zai.functions.invoke('page_reader', {
+   749→      url: url
+   750→    });
+   751→
+   752→    // Update cache
+   753→    this.cache.set(cacheKey, {
+   754→      data: result.data,
+   755→      timestamp: Date.now()
+   756→    });
+   757→
+   758→    return result.data;
+   759→  }
+   760→
+   761→  clearCache() {
+   762→    this.cache.clear();
+   763→  }
+   764→
+   765→  getCacheStats() {
+   766→    return {
+   767→      size: this.cache.size,
+   768→      entries: Array.from(this.cache.keys())
+   769→    };
+   770→  }
+   771→}
+   772→
+   773→// Usage
+   774→const reader = new CachedWebReader(3600000); // 1 hour cache
+   775→await reader.initialize();
+   776→
+   777→const data1 = await reader.readPage('https://example.com'); // Fresh fetch
+   778→const data2 = await reader.readPage('https://example.com'); // From cache
+   779→const data3 = await reader.readPage('https://example.com', true); // Force refresh
+   780→```
+   781→
+   782→### 4. Parallel Processing
+   783→
+   784→```javascript
+   785→import ZAI from 'z-ai-web-dev-sdk';
+   786→
+   787→async function readPagesInParallel(urls, concurrency = 3) {
+   788→  const zai = await ZAI.create();
+   789→  const results = [];
+   790→  
+   791→  // Process in batches
+   792→  for (let i = 0; i < urls.length; i += concurrency) {
+   793→    const batch = urls.slice(i, i + concurrency);
+   794→    
+   795→    const batchResults = await Promise.allSettled(
+   796→      batch.map(url =>
+   797→        zai.functions.invoke('page_reader', { url })
+   798→          .then(result => ({
+   799→            url: url,
+   800→            success: true,
+   801→            data: result.data
+   802→          }))
+   803→          .catch(error => ({
+   804→            url: url,
+   805→            success: false,
+   806→            error: error.message
+   807→          }))
+   808→      )
+   809→    );
+   810→
+   811→    results.push(...batchResults.map(r => r.value));
+   812→    console.log(`Completed batch ${Math.floor(i / concurrency) + 1}`);
+   813→  }
+   814→
+   815→  return results;
+   816→}
+   817→
+   818→// Usage
+   819→const urls = [
+   820→  'https://example.com/1',
+   821→  'https://example.com/2',
+   822→  'https://example.com/3',
+   823→  'https://example.com/4',
+   824→  'https://example.com/5'
+   825→];
+   826→
+   827→const results = await readPagesInParallel(urls, 2); // 2 concurrent requests
+   828→results.forEach(result => {
+   829→  if (result.success) {
+   830→    console.log(`✓ ${result.data.title}`);
+   831→  } else {
+   832→    console.log(`✗ ${result.url}: ${result.error}`);
+   833→  }
+   834→});
+   835→```
+   836→
+   837→### 5. Content Processing
+   838→
+   839→```javascript
+   840→import ZAI from 'z-ai-web-dev-sdk';
+   841→
+   842→class ContentProcessor {
+   843→  static extractMainContent(html) {
+   844→    // Remove scripts, styles, and comments
+   845→    let content = html
+   846→      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+   847→      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+   848→      .replace(/<!--[\s\S]*?-->/g, '');
+   849→
+   850→    return content;
+   851→  }
+   852→
+   853→  static htmlToPlainText(html) {
+   854→    return html
+   855→      .replace(/<br\s*\/?>/gi, '\n')
+   856→      .replace(/<\/p>/gi, '\n\n')
+   857→      .replace(/<[^>]*>/g, '')
+   858→      .replace(/&nbsp;/g, ' ')
+   859→      .replace(/&amp;/g, '&')
+   860→      .replace(/&lt;/g, '<')
+   861→      .replace(/&gt;/g, '>')
+   862→      .replace(/&quot;/g, '"')
+   863→      .replace(/\s+/g, ' ')
+   864→      .trim();
+   865→  }
+   866→
+   867→  static extractMetadata(html) {
+   868→    const metadata = {};
+   869→
+   870→    // Extract meta description
+   871→    const descMatch = html.match(/<meta\s+name=["']description["']\s+content=["']([^"']+)["']/i);
+   872→    if (descMatch) metadata.description = descMatch[1];
+   873→
+   874→    // Extract keywords
+   875→    const keywordsMatch = html.match(/<meta\s+name=["']keywords["']\s+content=["']([^"']+)["']/i);
+   876→    if (keywordsMatch) metadata.keywords = keywordsMatch[1].split(',').map(k => k.trim());
+   877→
+   878→    // Extract author
+   879→    const authorMatch = html.match(/<meta\s+name=["']author["']\s+content=["']([^"']+)["']/i);
+   880→    if (authorMatch) metadata.author = authorMatch[1];
+   881→
+   882→    return metadata;
+   883→  }
+   884→}
+   885→
+   886→// Usage
+   887→async function processWebPage(url) {
+   888→  const zai = await ZAI.create();
+   889→  const result = await zai.functions.invoke('page_reader', { url });
+   890→
+   891→  return {
+   892→    title: result.data.title,
+   893→    url: result.data.url,
+   894→    mainContent: ContentProcessor.extractMainContent(result.data.html),
+   895→    plainText: ContentProcessor.htmlToPlainText(result.data.html),
+   896→    metadata: ContentProcessor.extractMetadata(result.data.html),
+   897→    publishedTime: result.data.publishedTime
+   898→  };
+   899→}
+   900→
+   901→const processed = await processWebPage('https://example.com/article');
+   902→console.log('Processed content:', processed.title);
+   903→```
+   904→
+   905→## Common Use Cases
+   906→
+   907→1. **News Aggregation**: Collect and aggregate news articles from multiple sources
+   908→2. **Content Monitoring**: Track changes on specific web pages
+   909→3. **Research Tools**: Extract information from academic or reference websites
+   910→4. **Price Tracking**: Monitor product pages for price changes
+   911→5. **SEO Analysis**: Extract page metadata and content for SEO purposes
+   912→6. **Archive Creation**: Create local copies of web content
+   913→7. **Content Curation**: Collect and organize web content by topic
+   914→8. **Competitive Intelligence**: Monitor competitor websites for updates
+   915→
+   916→## Integration Examples
+   917→
+   918→### Express.js API Endpoint
+   919→
+   920→```javascript
+   921→import express from 'express';
+   922→import ZAI from 'z-ai-web-dev-sdk';
+   923→
+   924→const app = express();
+   925→app.use(express.json());
+   926→
+   927→let zaiInstance;
+   928→
+   929→async function initZAI() {
+   930→  zaiInstance = await ZAI.create();
+   931→}
+   932→
+   933→app.post('/api/read-page', async (req, res) => {
+   934→  try {
+   935→    const { url } = req.body;
+   936→
+   937→    if (!url) {
+   938→      return res.status(400).json({ 
+   939→        error: 'URL is required' 
+   940→      });
+   941→    }
+   942→
+   943→    const result = await zaiInstance.functions.invoke('page_reader', {
+   944→      url: url
+   945→    });
+   946→
+   947→    res.json({
+   948→      success: true,
+   949→      data: {
+   950→        title: result.data.title,
+   951→        url: result.data.url,
+   952→        content: result.data.html,
+   953→        publishedTime: result.data.publishedTime,
+   954→        tokensUsed: result.data.usage.tokens
+   955→      }
+   956→    });
+   957→  } catch (error) {
+   958→    res.status(500).json({
+   959→      success: false,
+   960→      error: error.message
+   961→    });
+   962→  }
+   963→});
+   964→
+   965→app.post('/api/read-multiple', async (req, res) => {
+   966→  try {
+   967→    const { urls } = req.body;
+   968→
+   969→    if (!urls || !Array.isArray(urls)) {
+   970→      return res.status(400).json({ 
+   971→        error: 'URLs array is required' 
+   972→      });
+   973→    }
+   974→
+   975→    const results = await Promise.allSettled(
+   976→      urls.map(url =>
+   977→        zaiInstance.functions.invoke('page_reader', { url })
+   978→          .then(result => ({
+   979→            url: url,
+   980→            success: true,
+   981→            data: result.data
+   982→          }))
+   983→          .catch(error => ({
+   984→            url: url,
+   985→            success: false,
+   986→            error: error.message
+   987→          }))
+   988→      )
+   989→    );
+   990→
+   991→    res.json({
+   992→      success: true,
+   993→      results: results.map(r => r.value)
+   994→    });
+   995→  } catch (error) {
+   996→    res.status(500).json({
+   997→      success: false,
+   998→      error: error.message
+   999→    });
+  1000→  }
+  1001→});
+  1002→
+  1003→initZAI().then(() => {
+  1004→  app.listen(3000, () => {
+  1005→    console.log('Web reader API running on port 3000');
+  1006→  });
+  1007→});
+  1008→```
+  1009→
+  1010→### Scheduled Content Fetcher
+  1011→
+  1012→```javascript
+  1013→import ZAI from 'z-ai-web-dev-sdk';
+  1014→import cron from 'node-cron';
+  1015→
+  1016→class ScheduledFetcher {
+  1017→  constructor() {
+  1018→    this.urls = [];
+  1019→    this.results = [];
+  1020→  }
+  1021→
+  1022→  async initialize() {
+  1023→    this.zai = await ZAI.create();
+  1024→  }
+  1025→
+  1026→  addUrl(url, schedule) {
+  1027→    this.urls.push({ url, schedule });
+  1028→  }
+  1029→
+  1030→  async fetchContent(url) {
+  1031→    try {
+  1032→      const result = await this.zai.functions.invoke('page_reader', {
+  1033→        url: url
+  1034→      });
+  1035→
+  1036→      return {
+  1037→        url: url,
+  1038→        success: true,
+  1039→        title: result.data.title,
+  1040→        content: result.data.html,
+  1041→        fetchedAt: new Date().toISOString()
+  1042→      };
+  1043→    } catch (error) {
+  1044→      return {
+  1045→        url: url,
+  1046→        success: false,
+  1047→        error: error.message,
+  1048→        fetchedAt: new Date().toISOString()
+  1049→      };
+  1050→    }
+  1051→  }
+  1052→
+  1053→  startScheduledFetch(url, schedule) {
+  1054→    cron.schedule(schedule, async () => {
+  1055→      console.log(`Fetching ${url}...`);
+  1056→      const result = await this.fetchContent(url);
+  1057→      this.results.push(result);
+  1058→      
+  1059→      // Keep only last 100 results
+  1060→      if (this.results.length > 100) {
+  1061→        this.results = this.results.slice(-100);
+  1062→      }
+  1063→      
+  1064→      console.log(`Fetched: ${result.success ? result.title : result.error}`);
+  1065→    });
+  1066→  }
+  1067→
+  1068→  start() {
+  1069→    for (const { url, schedule } of this.urls) {
+  1070→      this.startScheduledFetch(url, schedule);
+  1071→    }
+  1072→  }
+  1073→
+  1074→  getResults() {
+  1075→    return this.results;
+  1076→  }
+  1077→}
+  1078→
+  1079→// Usage
+  1080→const fetcher = new ScheduledFetcher();
+  1081→await fetcher.initialize();
+  1082→
+  1083→// Fetch every hour
+  1084→fetcher.addUrl('https://example.com/news', '0 * * * *');
+  1085→
+  1086→// Fetch every day at midnight
+  1087→fetcher.addUrl('https://example.com/daily', '0 0 * * *');
+  1088→
+  1089→fetcher.start();
+  1090→console.log('Scheduled fetching started');
+  1091→```
+  1092→
+  1093→## Troubleshooting
+  1094→
+  1095→**Issue**: "SDK must be used in backend"
+  1096→- **Solution**: Ensure z-ai-web-dev-sdk is only imported and used in server-side code
+  1097→
+  1098→**Issue**: Failed to fetch page (404, 403, etc.)
+  1099→- **Solution**: Verify the URL is accessible and not behind authentication/paywall
+  1100→
+  1101→**Issue**: Incomplete or missing content
+  1102→- **Solution**: Some pages may have dynamic content that requires JavaScript. The reader extracts static HTML content.
+  1103→
+  1104→**Issue**: High token usage
+  1105→- **Solution**: The token usage depends on page size. Consider caching frequently accessed pages.
+  1106→
+  1107→**Issue**: Slow response times
+  1108→- **Solution**: Implement caching, use parallel processing for multiple URLs, and consider rate limiting
+  1109→
+  1110→**Issue**: Empty HTML content
+  1111→- **Solution**: Check if the page requires authentication or has anti-scraping measures. Verify the URL is correct.
+  1112→
+  1113→## Performance Tips
+  1114→
+  1115→1. **Implement caching**: Cache frequently accessed pages to reduce API calls
+  1116→2. **Use parallel processing**: Fetch multiple pages concurrently (with rate limiting)
+  1117→3. **Process content efficiently**: Extract only needed information from HTML
+  1118→4. **Set timeouts**: Implement reasonable timeouts for page fetching
+  1119→5. **Monitor token usage**: Track usage to optimize costs
+  1120→6. **Batch operations**: Group multiple URL fetches when possible
+  1121→
+  1122→## Security Considerations
+  1123→
+  1124→- Validate all URLs before processing
+  1125→- Sanitize extracted HTML content before displaying
+  1126→- Implement rate limiting to prevent abuse
+  1127→- Never expose SDK credentials in client-side code
+  1128→- Be respectful of robots.txt and website terms of service
+  1129→- Handle user data according to privacy regulations
+  1130→- Implement proper error handling for failed requests
+  1131→
+  1132→## Remember
+  1133→
+  1134→- Always use z-ai-web-dev-sdk in backend code only
+  1135→- The SDK is already installed - import as shown in examples
+  1136→- Implement proper error handling for robust applications
+  1137→- Use caching to improve performance and reduce costs
+  1138→- Respect website terms of service and rate limits
+  1139→- Process HTML content carefully to extract meaningful data
+  1140→- Monitor token usage for cost optimization
+  1141→
