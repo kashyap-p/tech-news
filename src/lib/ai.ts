@@ -96,11 +96,12 @@ export interface ExtractedContent {
 
 export async function extractArticleContent(
   articleId: string,
+  force = false,
 ): Promise<{ content: ExtractedContent | null; article: any }> {
   const article = await db.article.findUnique({ where: { id: articleId } });
   if (!article) return { content: null, article: null };
 
-  if (article.content) {
+  if (!force && article.content) {
     return {
       article,
       content: {
@@ -117,7 +118,11 @@ export async function extractArticleContent(
     const result: any = await zai.functions.invoke("page_reader", { url: article.url });
     const data = result?.data;
     if (!data?.html) return { article, content: null };
-    const cleanHtml = sanitizeHtml(data.html);
+    // Run readability-style extraction to isolate the actual article body
+    // (the page_reader returns the full page HTML including nav, sidebars,
+    // forms, footers — without this the reader renders as page chrome).
+    const cleanHtml = extractReadableContent(data.html);
+    if (!cleanHtml) return { article, content: null };
     const title = data.title || article.title;
     const publishedTime = data.publishedTime || null;
     await db.article.update({
@@ -135,22 +140,214 @@ export async function extractArticleContent(
 }
 
 /**
- * Light sanitisation of reader HTML before storing/rendering:
- * strip scripts, iframes, event handlers, and external images that aren't
- * strictly needed. We keep semantic tags so react-markdown / dangerouslySetInnerHTML
- * rendering stays readable. The reader view always links back to the source.
+ * Readability-style content extraction.
+ *
+ * `page_reader` returns the FULL page HTML (head, nav, sidebars, forms,
+ * footers, ads, comment sections). Rendering that verbatim buries the article
+ * under hundreds of junk elements. This function isolates the real article
+ * body and strips non-content chrome so the in-app reader is actually readable.
+ *
+ * Strategy:
+ *  1. Drop <head> entirely.
+ *  2. Isolate the main content container — prefer <article>, then <main>,
+ *     then [role=main], then common content ids/classes, else full body.
+ *  3. Strip non-content block tags (nav, header, aside, footer, form, etc.)
+ *     and junk containers (comments, sidebar, related, newsletter, ads…)
+ *     using a depth-aware balanced-tag stripper so nesting is handled.
+ *  4. Strip inline non-content tags (script, style, meta, link, input, …).
+ *  5. Remove empty wrappers and collapse whitespace.
+ *  6. If the remaining visible text is too short, return null so the caller
+ *     can fall back to the article description + original link.
  */
-function sanitizeHtml(html: string): string {
-  let out = html
+function extractReadableContent(html: string): string | null {
+  if (!html) return null;
+  let out = html;
+
+  // 1. Drop <head>
+  out = out.replace(/<head[\s\S]*?<\/head>/i, "");
+
+  // 2. Isolate main content container.
+  out =
+    extractTagBlock(out, "article") ||
+    extractTagBlock(out, "main") ||
+    extractAttrBlock(out, "role", "main") ||
+    extractClassOrIdBlock(out, /(post-content|article-body|article__body|entry-content|story-body|content-body|main-content|post-body|article-content)/i) ||
+    out;
+
+  // 3. Strip non-content BLOCK elements (with their children), depth-aware.
+  //    These wrap nav, headers, sidebars, footers, forms, etc.
+  const JUNK_BLOCK_TAGS = [
+    "header",
+    "nav",
+    "aside",
+    "footer",
+    "form",
+    "svg",
+    "template",
+    "noscript",
+    "iframe",
+    "video",
+    "audio",
+    "canvas",
+  ];
+  for (const tag of JUNK_BLOCK_TAGS) {
+    out = stripBlocksByTag(out, tag);
+  }
+  // Strip containers whose class/id screams "not article body".
+  out = stripBlocksWithAttr(
+    out,
+    /(comment|sidebar|related|share|social|newsletter|subscribe|advert|banner|widget|popup|modal|cookie|consent|paywall|recommend|trending|popular|breadcrumb|pagination|signup|signin|login|toolbar|action-bar|reading-progress)/i,
+  );
+
+  // 4. Strip inline non-content tags (void + raw-text elements).
+  out = out
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
+    .replace(/<title[^>]*>[\s\S]*?<\/title>/gi, "")
+    .replace(/<link[^>]*>/gi, "")
+    .replace(/<meta[^>]*>/gi, "")
+    .replace(/<base[^>]*>/gi, "")
+    .replace(/<input[^>]*>/gi, "")
+    .replace(/<button[\s\S]*?<\/button>/gi, "")
+    .replace(/<select[\s\S]*?<\/select>/gi, "")
+    .replace(/<textarea[\s\S]*?<\/textarea>/gi, "")
+    .replace(/<label[\s\S]*?<\/label>/gi, "")
+    .replace(/<map[\s\S]*?<\/map>/gi, "")
+    .replace(/<area[^>]*>/gi, "");
+
+  // Strip inline event handlers + inline styles (keep the element, drop attrs).
+  out = out
     .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
     .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
     .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
-    .replace(/<svg[\s\S]*?<\/svg>/gi, "");
+    .replace(/\sstyle\s*=\s*"[^"]*"/gi, "")
+    .replace(/\sstyle\s*=\s*'[^']*'/gi, "");
+
+  // 5. Remove empty wrappers (repeat a few times to collapse nested empties).
+  for (let i = 0; i < 3; i++) {
+    out = out
+      .replace(/<div\b[^>]*>\s*<\/div>/gi, "")
+      .replace(/<section\b[^>]*>\s*<\/section>/gi, "")
+      .replace(/<span\b[^>]*>\s*<\/span>/gi, "")
+      .replace(/<p\b[^>]*>\s*<\/p>/gi, "")
+      .replace(/<ul\b[^>]*>\s*<\/ul>/gi, "")
+      .replace(/<ol\b[^>]*>\s*<\/ol>/gi, "");
+  }
+
+  // Collapse excessive whitespace.
+  out = out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+
+  // 6. Bail out if there's almost no readable text.
+  const text = out.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (text.length < 100) return null;
+
   return out;
+}
+
+/** Extract the first `<tag ...>` ... LAST `</tag>` block (handles nesting). */
+function extractTagBlock(html: string, tag: string): string | null {
+  const openRe = new RegExp(`<${tag}\\b`, "i");
+  const openMatch = openRe.exec(html);
+  if (!openMatch) return null;
+  const start = openMatch.index;
+  const closeTag = `</${tag}>`;
+  const lower = html.toLowerCase();
+  const end = lower.lastIndexOf(closeTag);
+  if (end === -1 || end <= start) return null;
+  return html.slice(start, end + closeTag.length);
+}
+
+/** Extract the first block whose given attribute matches `value`. */
+function extractAttrBlock(html: string, attr: string, value: string): string | null {
+  const re = new RegExp(`<([a-z0-9]+)\\b[^>]*\\s${attr}\\s*=\\s*["']?${value}["']?[^>]*>`, "i");
+  const m = re.exec(html);
+  if (!m) return null;
+  const tag = m[1];
+  return extractTagBlockFromIndex(html, tag, m.index);
+}
+
+/** Extract the first <div>/<section>/<article> whose class or id matches `pattern`. */
+function extractClassOrIdBlock(html: string, pattern: RegExp): string | null {
+  const re = new RegExp(
+    `<(div|section|article|main)\\b[^>]*\\s(class|id)\\s*=\\s*["'][^"']*${pattern.source}[^"']*["']`,
+    "i",
+  );
+  const m = re.exec(html);
+  if (!m) return null;
+  return extractTagBlockFromIndex(html, m[1], m.index);
+}
+
+/** Extract `<tag>` block starting at a known opening-tag index (depth-aware). */
+function extractTagBlockFromIndex(html: string, tag: string, openIdx: number): string | null {
+  const close = findMatchingClose(html, openIdx, tag);
+  if (close === -1) return null;
+  const closeTag = `</${tag}>`;
+  return html.slice(openIdx, close + closeTag.length);
+}
+
+/** Find the index of the `</tag>` that closes the tag opened at `openIdx`. */
+function findMatchingClose(html: string, openIdx: number, tag: string): number {
+  const openEnd = html.indexOf(">", openIdx);
+  if (openEnd === -1) return -1;
+  const re = new RegExp(`<${tag}\\b[^>]*>|</${tag}>`, "gi");
+  re.lastIndex = openEnd + 1;
+  let depth = 1;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    if (m[0].startsWith("</")) {
+      depth--;
+      if (depth === 0) return m.index;
+    } else {
+      depth++;
+    }
+  }
+  return -1;
+}
+
+/** Remove every `<tag>...</tag>` block (and its children) from the html. */
+function stripBlocksByTag(html: string, tag: string): string {
+  const openRe = new RegExp(`<${tag}\\b`, "gi");
+  let result = "";
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = openRe.exec(html)) !== null) {
+    const openIdx = m.index;
+    const close = findMatchingClose(html, openIdx, tag);
+    if (close === -1) {
+      // unbalanced — drop just the opening tag and continue
+      result += html.slice(cursor, openIdx);
+      const gt = html.indexOf(">", openIdx);
+      cursor = gt === -1 ? html.length : gt + 1;
+      openRe.lastIndex = cursor;
+      continue;
+    }
+    result += html.slice(cursor, openIdx);
+    cursor = close + `</${tag}>`.length;
+    openRe.lastIndex = cursor;
+  }
+  result += html.slice(cursor);
+  return result;
+}
+
+/** Remove `<div|section|article|aside|nav|span>` blocks whose opening tag
+ *  has a class/id matching `pattern`. Depth-aware so nested content is safe. */
+function stripBlocksWithAttr(html: string, pattern: RegExp): string {
+  const tagRe = /<(div|section|article|aside|nav|span|ul|ol)\b[^>]*>/gi;
+  let result = "";
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(html)) !== null) {
+    const openTag = m[0];
+    if (!pattern.test(openTag)) continue;
+    const tag = m[1];
+    const close = findMatchingClose(html, m.index, tag);
+    if (close === -1) continue;
+    result += html.slice(cursor, m.index);
+    cursor = close + `</${tag}>`.length;
+    tagRe.lastIndex = cursor;
+  }
+  result += html.slice(cursor);
+  return result;
 }
 
 // ---------------------------------------------------------------------------

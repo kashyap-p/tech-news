@@ -10,11 +10,11 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(req: Request) {
   try {
-    const { articleId } = await req.json();
+    const { articleId, force } = await req.json();
     if (!articleId || typeof articleId !== "string") {
       return NextResponse.json({ success: false, error: "articleId required" }, { status: 400 });
     }
-    const { content, article } = await extractArticleContent(articleId);
+    const { content, article } = await extractArticleContent(articleId, force === true);
     if (!article) {
       return NextResponse.json({ success: false, error: "Article not found" }, { status: 404 });
     }

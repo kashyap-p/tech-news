@@ -71,7 +71,7 @@ export function ReaderDialog({
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadRead = useCallback(async (id: string) => {
+  const loadRead = useCallback(async (id: string, force = false) => {
     setLoadingRead(true);
     setError(null);
     setRead(null);
@@ -79,7 +79,7 @@ export function ReaderDialog({
       const res = await fetch("/api/news/read", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ articleId: id }),
+        body: JSON.stringify({ articleId: id, force }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || "Failed to load article");
@@ -283,7 +283,7 @@ export function ReaderDialog({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => loadRead(article.id)}
+                  onClick={() => loadRead(article.id, true)}
                 >
                   <RefreshCw className="mr-1.5 h-4 w-4" /> Retry
                 </Button>
@@ -300,6 +300,40 @@ export function ReaderDialog({
               className="tn-reader-content"
               dangerouslySetInnerHTML={{ __html: read.content.html }}
             />
+          ) : read ? (
+            // Extraction succeeded but yielded no usable content (e.g. paywalled
+            // sites, SPAs, or Twitter cards). Show a clean fallback instead of
+            // a broken empty box.
+            <div className="flex flex-col gap-4 py-4">
+              {article.description && (
+                <p className="text-sm leading-relaxed text-foreground/90">
+                  {article.description}
+                </p>
+              )}
+              <div className="rounded-xl border border-border bg-secondary/40 p-4">
+                <p className="text-sm text-muted-foreground">
+                  The full article couldn&apos;t be extracted for in-app reading
+                  (the source may use JavaScript rendering, a paywall, or block
+                  readers).
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => window.open(article.url, "_blank", "noopener,noreferrer")}
+                  >
+                    <ExternalLink className="mr-1.5 h-4 w-4" /> Read on {hostname(article.url)}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => loadRead(article.id, true)}
+                    disabled={loadingRead}
+                  >
+                    <RefreshCw className="mr-1.5 h-4 w-4" /> Re-extract
+                  </Button>
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="py-6">
               <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
