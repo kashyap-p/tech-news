@@ -212,24 +212,41 @@
   color: oklch(0.88 0.01 280);
   line-height: 1.75;
   font-size: 1.02rem;
+  /* Containment so wide children (pre, tables, images) can't blow out the
+     dialog width. min-w-0 + overflow-wrap on the parent + break-words on
+     text prevents horizontal overflow from extracted article HTML. */
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.tn-reader-content * {
+  max-width: 100%;
 }
 .tn-reader-content h1,
 .tn-reader-content h2,
-.tn-reader-content h3 {
+.tn-reader-content h3,
+.tn-reader-content h4 {
   color: oklch(0.96 0.01 280);
   font-weight: 700;
   margin-top: 1.5em;
   margin-bottom: 0.5em;
   line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 .tn-reader-content h1 { font-size: 1.6rem; }
 .tn-reader-content h2 { font-size: 1.35rem; }
 .tn-reader-content h3 { font-size: 1.15rem; }
-.tn-reader-content p { margin: 0.85em 0; }
+.tn-reader-content h4 { font-size: 1rem; }
+.tn-reader-content p {
+  margin: 0.85em 0;
+  overflow-wrap: anywhere;
+}
 .tn-reader-content a {
   color: var(--tn-cyan);
   text-decoration: underline;
   text-underline-offset: 2px;
+  overflow-wrap: anywhere;
 }
 .tn-reader-content ul,
 .tn-reader-content ol {
@@ -242,6 +259,7 @@
   height: auto;
   border-radius: 0.75rem;
   margin: 1em 0;
+  display: block;
 }
 .tn-reader-content blockquote {
   border-left: 3px solid var(--tn-pink);
@@ -257,7 +275,8 @@
   padding: 0.85em 1em;
   overflow-x: auto;
   margin: 1em 0;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  max-width: 100%;
 }
 .tn-reader-content code {
   font-family: var(--font-geist-mono), monospace;
@@ -265,10 +284,40 @@
   padding: 0.1em 0.35em;
   border-radius: 0.3rem;
   font-size: 0.9em;
+  overflow-wrap: anywhere;
 }
 .tn-reader-content pre code {
   background: transparent;
   padding: 0;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+.tn-reader-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+.tn-reader-content table th,
+.tn-reader-content table td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.6em;
+  text-align: left;
+}
+.tn-reader-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5em 0;
+}
+.tn-reader-content figure {
+  margin: 1em 0;
+}
+.tn-reader-content figcaption {
+  font-size: 0.8rem;
+  color: oklch(0.68 0.02 280);
+  text-align: center;
+  margin-top: 0.4em;
 }
 
 /* Fade-in-up for cards */
