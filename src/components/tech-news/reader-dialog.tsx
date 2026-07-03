@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Dialog,
@@ -70,6 +70,7 @@ export function ReaderDialog({
   const [loadingRead, setLoadingRead] = useState(false);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const loadRead = useCallback(async (id: string, force = false) => {
     setLoadingRead(true);
@@ -125,6 +126,55 @@ export function ReaderDialog({
     }
   }, [article, open, loadRead]);
 
+  // Lock wheel + touch scrolling to the reader dialog.
+  // The dialog is `position: fixed` over a scrollable page; without this, some
+  // browsers route wheel/touch events to the document and the PAGE scrolls
+  // instead of the dialog — so long articles get clipped and can't be reached.
+  // We attach a NON-passIVE listener so preventDefault works, manually scroll
+  // the dialog (clamped to bounds), and always swallow the event.
+  useEffect(() => {
+    if (!open) return;
+    // Radix renders DialogContent into a portal; defer one frame so the
+    // element is guaranteed to be in the DOM before we attach listeners.
+    let cleanup: (() => void) | null = null;
+    let el: HTMLElement | null = null;
+    const raf = requestAnimationFrame(() => {
+      el =
+        contentRef.current ??
+        (document.querySelector('[data-slot="dialog-content"]') as HTMLElement | null);
+      if (!el) return;
+
+      function onWheel(e: WheelEvent) {
+        const max = el!.scrollHeight - el!.clientHeight;
+        el!.scrollTop = Math.max(0, Math.min(max, el!.scrollTop + e.deltaY));
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      function onTouchMove(e: TouchEvent) {
+        const max = el!.scrollHeight - el!.clientHeight;
+        if (max <= 0) {
+          e.preventDefault();
+          return;
+        }
+        if (el!.scrollTop <= 0 || el!.scrollTop >= max) {
+          e.preventDefault();
+        }
+        e.stopPropagation();
+      }
+
+      el.addEventListener("wheel", onWheel, { passive: false });
+      el.addEventListener("touchmove", onTouchMove, { passive: false });
+      cleanup = () => {
+        el!.removeEventListener("wheel", onWheel);
+        el!.removeEventListener("touchmove", onTouchMove);
+      };
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      cleanup?.();
+    };
+  }, [open]);
+
   if (!article) return null;
   const meta = SOURCE_META[article.source];
   const shownTitle = read?.content?.title || article.title;
@@ -133,7 +183,10 @@ export function ReaderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="tn-scroll-thin max-h-[92vh] w-[95vw] max-w-3xl overflow-y-auto gap-0 p-0 sm:rounded-2xl">
+      <DialogContent
+        ref={contentRef}
+        className="tn-scroll-thin overscroll-contain max-h-[92vh] w-[95vw] max-w-3xl overflow-y-auto gap-0 p-0 sm:rounded-2xl"
+      >
         {/* Header */}
         <DialogHeader className="space-y-0 p-5 pb-3 sm:p-6 sm:pb-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
