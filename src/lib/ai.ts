@@ -1,8 +1,8 @@
 import { db } from "@/lib/db";
-import { createZAI, fetchAllNews } from "@/lib/news";
+import { createAIClient, fetchAllNews } from "@/lib/news";
 
 /**
- * AI service (backend only — z-ai-web-dev-sdk must never run client-side).
+ * AI service (backend only — the AI SDK must never run client-side).
  *
  * Provides:
  *  - summarizeArticle(): concise bullet summary + tags for an article
@@ -10,8 +10,8 @@ import { createZAI, fetchAllNews } from "@/lib/news";
  *  - chatAboutNews(): multi-turn assistant grounded on the latest articles
  *
  * All helpers are defensive: they degrade gracefully if the SDK, network, OR
- * the database fails (e.g. on Vercel's read-only filesystem). AI features
- * work as long as the ZAI env vars are set; the DB is an optional cache.
+ * the database fails (e.g. on a read-only serverless filesystem). AI features
+ * work as long as the AI env vars are set; the DB is an optional cache.
  */
 
 /** Check if the DB is available (best-effort). */
@@ -67,8 +67,8 @@ export async function summarizeArticle(input: ArticleInput): Promise<ArticleSumm
   }
 
   try {
-    const zai = await createZAI();
-    const completion = await zai.chat.completions.create({
+    const ai = await createAIClient();
+    const completion = await ai.chat.completions.create({
       messages: [
         { role: "assistant", content: SYSTEM_SUMMARIZER },
         {
@@ -197,8 +197,8 @@ export async function extractArticleContent(
   }
 
   try {
-    const zai = await createZAI();
-    const result: any = await zai.functions.invoke("page_reader", { url });
+    const ai = await createAIClient();
+    const result: any = await ai.functions.invoke("page_reader", { url });
     const data = result?.data;
     if (!data?.html) return { article, content: null };
     // Readability-style extraction isolates the actual article body
@@ -536,8 +536,8 @@ export async function chatAboutNews(
 
   let reply = "I couldn't reach the news brain right now. Please try again in a moment.";
   try {
-    const zai = await createZAI();
-    const completion = await zai.chat.completions.create({
+    const ai = await createAIClient();
+    const completion = await ai.chat.completions.create({
       messages,
       thinking: { type: "disabled" },
     });

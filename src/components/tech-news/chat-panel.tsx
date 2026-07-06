@@ -397,7 +397,7 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
             </form>
             <div className="mt-1.5 flex items-center justify-between px-1">
               <Badge variant="secondary" className="bg-white/5 text-[0.6rem] text-muted-foreground">
-                <Sparkles className="mr-1 h-2.5 w-2.5" /> Powered by Z.ai
+                <Sparkles className="mr-1 h-2.5 w-2.5" /> AI-powered
               </Badge>
               {messages.length > 0 && (
                 <button

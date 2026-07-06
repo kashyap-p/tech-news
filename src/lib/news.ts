@@ -6,14 +6,14 @@ import { db } from "@/lib/db";
  * Aggregates tech + AI news from multiple sources worldwide:
  *  - Dev.to API (developer-written articles across many tags)
  *  - Hacker News (Algolia search API — far cheaper than 40 concurrent firebase calls)
- *  - z-ai-web-dev-sdk `web_search` for live worldwide AI & tech news
+ *  - Live worldwide web search for AI & tech news
  *
  * All fetching happens server-side (no CORS, no client API exposure).
  *
- * IMPORTANT (Vercel/serverless compatibility):
+ * IMPORTANT (serverless compatibility):
  * The database is an OPTIONAL cache. DTOs are built directly from the raw
  * fetched data so the feed works even when the DB is unavailable (e.g. on
- * Vercel's read-only filesystem with SQLite). Persistence is best-effort —
+ * a read-only serverless filesystem with SQLite). Persistence is best-effort —
  * if `db.article.upsert` fails, articles are still returned with their
  * `sourceId` used as the `id` field.
  */
@@ -76,30 +76,31 @@ async function fetchWithTimeout(url: string, timeoutMs = 10000, init?: RequestIn
 }
 
 // ---------------------------------------------------------------------------
-// ZAI SDK factory — supports env vars for Vercel, falls back to config file.
+// AI client factory — supports env vars for serverless deploys, falls back to
+// the local config file for development.
 // ---------------------------------------------------------------------------
-let zaiPromise: Promise<any> | null = null;
-export async function createZAI(): Promise<any> {
-  if (zaiPromise) return zaiPromise;
-  const ZAI = (await import("z-ai-web-dev-sdk")).default;
-  const baseUrl = process.env.ZAI_BASE_URL;
-  const apiKey = process.env.ZAI_API_KEY;
+let aiClientPromise: Promise<any> | null = null;
+export async function createAIClient(): Promise<any> {
+  if (aiClientPromise) return aiClientPromise;
+  const SDK = (await import("ai-sdk")).default;
+  const baseUrl = process.env.AI_BASE_URL;
+  const apiKey = process.env.AI_API_KEY;
   if (baseUrl && apiKey) {
-    // Vercel / cloud: use env vars.
-    zaiPromise = Promise.resolve(
-      new ZAI({
+    // Serverless / cloud: use env vars.
+    aiClientPromise = Promise.resolve(
+      new SDK({
         baseUrl,
         apiKey,
-        chatId: process.env.ZAI_CHAT_ID || "",
-        token: process.env.ZAI_TOKEN || "",
-        userId: process.env.ZAI_USER_ID || "",
+        chatId: process.env.AI_CHAT_ID || "",
+        token: process.env.AI_TOKEN || "",
+        userId: process.env.AI_USER_ID || "",
       } as any),
     );
   } else {
-    // Local dev: read from /etc/.z-ai-config (ZAI.create() handles this).
-    zaiPromise = ZAI.create();
+    // Local dev: read from the local config file.
+    aiClientPromise = SDK.create();
   }
-  return zaiPromise;
+  return aiClientPromise;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +182,7 @@ async function fetchHackerNews(): Promise<RawArticle[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Worldwide AI / Tech news via z-ai web search
+// Worldwide AI / Tech news via live web search
 // ---------------------------------------------------------------------------
 async function fetchWebNewsAI(): Promise<RawArticle[]> {
   return fetchWebNews("artificial intelligence news", "ai");
@@ -193,8 +194,8 @@ async function fetchWebNewsTech(): Promise<RawArticle[]> {
 
 async function fetchWebNews(query: string, category: string): Promise<RawArticle[]> {
   try {
-    const zai = await createZAI();
-    const results: any[] = await zai.functions.invoke("web_search", {
+    const ai = await createAIClient();
+    const results: any[] = await ai.functions.invoke("web_search", {
       query,
       num: 15,
       recency_days: 3,

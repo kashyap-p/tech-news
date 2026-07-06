@@ -463,7 +463,7 @@ export default function Home() {
             <span className="tn-gradient-text font-bold">TechNews Worldwide</span>
             <span className="hidden sm:inline">·</span>
             <span className="hidden items-center gap-1 sm:inline-flex">
-              Built with <Heart className="h-3.5 w-3.5 text-pink-400" /> on Next.js + Z.ai
+              Built with <Heart className="h-3.5 w-3.5 text-pink-400" /> on Next.js
             </span>
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -484,7 +484,7 @@ export default function Home() {
               Hacker News
             </a>
             <span className="flex items-center gap-1">
-              <Sparkles className="h-3 w-3 text-purple-400" /> AI by Z.ai
+              <Sparkles className="h-3 w-3 text-purple-400" /> AI-powered
             </span>
           </div>
         </div>

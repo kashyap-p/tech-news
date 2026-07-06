@@ -30,7 +30,7 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: "TechNews Worldwide" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.svg",
   },
   openGraph: {
     title: "TechNews Worldwide — AI & Tech News, Decoded",
