@@ -328,3 +328,13 @@
 .tn-fade-up {
   animation: tn-fade-up 0.5s ease both;
 }
+
+/* Chat markdown — compact typography inside chat bubbles */
+.chat-markdown {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.chat-markdown > *:first-child { margin-top: 0; }
+.chat-markdown > *:last-child { margin-bottom: 0; }

@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
-import { chatAboutNews, getChatHistory } from "@/lib/ai";
+import { chatAboutNews, getChatHistory, clearChatHistory } from "@/lib/ai";
 import { getOrCreateSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET  /api/chat           — recent chat history for this session
- * POST /api/chat           { message: string } — send a message to Pulse, the news assistant
+ * GET    /api/chat  — recent chat history for this session
+ * POST   /api/chat  { message: string } — send a message to Pulse, the news assistant
+ * DELETE /api/chat  — clear chat history for this session
  */
 export async function GET() {
   const sessionId = await getOrCreateSessionId();
@@ -28,6 +29,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true, reply, context });
   } catch (err: any) {
     console.error("[api/chat] error:", err);
+    return NextResponse.json(
+      { success: false, error: err?.message || "Server error" },
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE() {
+  try {
+    const sessionId = await getOrCreateSessionId();
+    await clearChatHistory(sessionId);
+    return NextResponse.json({ success: true });
+  } catch (err: any) {
+    console.error("[api/chat DELETE] error:", err);
     return NextResponse.json(
       { success: false, error: err?.message || "Server error" },
       { status: 500 },

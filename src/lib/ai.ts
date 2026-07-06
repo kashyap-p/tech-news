@@ -439,9 +439,13 @@ function stripBlocksWithAttr(html: string, pattern: RegExp): string {
 // ---------------------------------------------------------------------------
 const SYSTEM_NEWS_ASSISTANT = `You are Pulse, an AI news assistant inside TechNews Worldwide — a tech & AI news aggregator.
 You help the user understand the latest technology and AI news. Be concise, friendly and accurate.
-When given a context block of recent article titles + snippets, ground your answers in them and cite the article number like [1], [2].
+
+When given a context block of recent article titles + snippets, ground your answers in them and cite the article number like [1], [2]. Only cite numbers that exist in the context list — never invent citation numbers.
+
 If the user asks about something not in the context, say you don't have a recent article on that and give a brief general answer instead.
-Never invent article URLs. Keep answers under 180 words unless the user asks for more detail.`;
+Never invent article URLs. Keep answers under 180 words unless the user asks for more detail.
+
+Format your response in clean Markdown: use **bold** for key terms, bullet lists for multiple items, and short paragraphs. Do NOT start your response with a blank line or newline — begin with the first word directly.`;
 
 export interface ChatTurn {
   role: "user" | "assistant";
@@ -537,7 +541,7 @@ export async function chatAboutNews(
       messages,
       thinking: { type: "disabled" },
     });
-    reply = completion.choices[0]?.message?.content || reply;
+    reply = (completion.choices[0]?.message?.content || reply).trim();
   } catch (err) {
     console.error("[ai] chat failed:", err);
   }
@@ -580,4 +584,17 @@ export async function getChatHistory(sessionId: string): Promise<ChatTurn[]> {
     }
   }
   return memoryChatHistory.get(sessionId) || [];
+}
+
+/** Clear chat history for a session (both DB and in-memory fallback). */
+export async function clearChatHistory(sessionId: string): Promise<void> {
+  memoryChatHistory.delete(sessionId);
+  const dbOk = await isDbAvailable();
+  if (dbOk) {
+    try {
+      await db.chatMessage.deleteMany({ where: { sessionId } });
+    } catch {
+      // ignore
+    }
+  }
 }

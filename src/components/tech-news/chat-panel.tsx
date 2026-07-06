@@ -5,9 +5,21 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Bot, Send, Sparkles, X, Loader2, MessageSquare, Trash2 } from "lucide-react";
+import {
+  Bot,
+  Send,
+  Sparkles,
+  X,
+  Loader2,
+  MessageSquare,
+  Trash2,
+  RotateCw,
+  User as UserIcon,
+  ExternalLink,
+} from "lucide-react";
 import { ChatTurn } from "@/lib/types";
 import { toast } from "sonner";
+import { ChatMarkdown } from "./chat-markdown";
 
 interface ChatPanelProps {
   open: boolean;
@@ -21,24 +33,29 @@ const SUGGESTIONS = [
   "What's trending in software engineering?",
 ];
 
+interface ChatContextItem {
+  title: string;
+  url: string;
+}
+
 export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [context, setContext] = useState<{ title: string; url: string }[]>([]);
-  // Ref to the REAL scrollable element (the native overflow-y-auto div).
+  // Per-message context: only the latest assistant message has context.
+  const [context, setContext] = useState<ChatContextItem[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Ref to the panel root — we lock wheel events at this level so wheeling
-  // ANYWHERE inside the chat (header, messages, input) never scrolls the page.
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const loadHistory = useCallback(async () => {
     try {
-      const res = await fetch("/api/chat");
+      const res = await fetch("/api/chat", { cache: "no-store" });
       const data = await res.json();
       if (data.success && Array.isArray(data.history)) {
         setMessages(data.history);
+        // Context isn't stored per-message historically; clear it on reload.
+        setContext([]);
       }
     } catch {
       // ignore — non-critical
@@ -53,7 +70,6 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    // requestAnimationFrame ensures new content has laid out before we scroll.
     const id = requestAnimationFrame(() => {
       el.scrollTop = el.scrollHeight;
     });
@@ -74,13 +90,7 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onOpenChange]);
 
-  // Lock wheel scrolling to the chat viewport.
-  // The panel is `position: fixed` over a scrollable page; without this, some
-  // browsers redirect wheel events to the document and the page scrolls
-  // instead of the chat. We attach a NON-passive listener to the whole panel
-  // so wheeling anywhere inside the chat never reaches the page. If the event
-  // is over the scroll region we scroll it (clamped); otherwise we just swallow
-  // the event so the page stays put.
+  // Lock wheel scrolling to the chat viewport (non-passive listener).
   useEffect(() => {
     if (!open) return;
     const panel = panelRef.current;
@@ -91,7 +101,6 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
         const max = scroll.scrollHeight - scroll.clientHeight;
         scroll.scrollTop = Math.max(0, Math.min(max, scroll.scrollTop + e.deltaY));
       }
-      // Always swallow the event so the page NEVER scrolls while chat is open.
       e.preventDefault();
       e.stopPropagation();
     }
@@ -99,43 +108,93 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
     return () => panel.removeEventListener("wheel", onWheel);
   }, [open]);
 
-  async function send(text?: string) {
-    const message = (text ?? input).trim();
-    if (!message || loading) return;
-    setInput("");
-    const next: ChatTurn[] = [...messages, { role: "user", content: message }];
-    setMessages(next);
+  const send = useCallback(
+    async (text?: string) => {
+      const message = (text ?? input).trim();
+      if (!message || loading) return;
+      setInput("");
+      const next: ChatTurn[] = [...messages, { role: "user", content: message }];
+      setMessages(next);
+      setLoading(true);
+      setContext([]);
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          setMessages([...next, { role: "assistant", content: data.reply }]);
+          setContext(data.context || []);
+        } else {
+          setMessages([
+            ...next,
+            {
+              role: "assistant",
+              content:
+                "Sorry, I couldn't process that right now. Please try again in a moment.",
+            },
+          ]);
+        }
+      } catch {
+        setMessages([
+          ...next,
+          {
+            role: "assistant",
+            content: "Network error. Please check your connection and try again.",
+          },
+        ]);
+        toast.error("Chat request failed");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [input, loading, messages],
+  );
+
+  // Regenerate the last assistant response: drop it and re-ask the last user msg.
+  const regenerate = useCallback(async () => {
+    if (loading || messages.length < 2) return;
+    // Find the last user message (there must be one before the last assistant).
+    const lastUserIdx = [...messages].reverse().findIndex((m) => m.role === "user");
+    if (lastUserIdx === -1) return;
+    const userIdx = messages.length - 1 - lastUserIdx;
+    const lastUserMsg = messages[userIdx].content;
+    const trimmed = messages.slice(0, userIdx); // keep history up to (not incl) last user msg
+    setMessages([...trimmed, { role: "user", content: lastUserMsg }]);
     setLoading(true);
     setContext([]);
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message: lastUserMsg }),
       });
       const data = await res.json();
       if (data.success) {
-        setMessages([...next, { role: "assistant", content: data.reply }]);
+        setMessages([...trimmed, { role: "user", content: lastUserMsg }, { role: "assistant", content: data.reply }]);
         setContext(data.context || []);
-      } else {
-        setMessages([
-          ...next,
-          { role: "assistant", content: "Sorry, I couldn't process that. Please try again." },
-        ]);
       }
     } catch {
-      setMessages([
-        ...next,
-        {
-          role: "assistant",
-          content: "Network error. Please check your connection and try again.",
-        },
-      ]);
-      toast.error("Chat request failed");
+      toast.error("Regenerate failed");
     } finally {
       setLoading(false);
     }
-  }
+  }, [loading, messages]);
+
+  const clearChat = useCallback(async () => {
+    setMessages([]);
+    setContext([]);
+    try {
+      await fetch("/api/chat", { method: "DELETE" });
+      toast.success("Chat cleared");
+    } catch {
+      toast.error("Couldn't clear chat history");
+    }
+  }, []);
+
+  const lastAssistantIdx = [...messages].reverse().findIndex((m) => m.role === "assistant");
 
   return (
     <AnimatePresence>
@@ -181,20 +240,13 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
             </Button>
           </div>
 
-          {/*
-            Messages scroll container.
-            CRITICAL: `min-h-0` + `flex-1` + `overflow-y-auto` makes this a real
-            bounded scroll region. Without `min-h-0`, a flex item's min-height
-            defaults to `auto` (content size) and the container grows instead of
-            scrolling — which is exactly the page-scroll-instead-of-chat bug.
-            `overscroll-contain` stops wheel/touch scroll chaining to the page.
-          */}
+          {/* Messages */}
           <div
             ref={scrollRef}
             className="tn-scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain"
           >
             <div className="space-y-4 p-4">
-              {messages.length === 0 && (
+              {messages.length === 0 && !loading && (
                 <div className="space-y-4 py-6 text-center">
                   <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-pink-500/20 to-blue-500/20">
                     <MessageSquare className="h-7 w-7 text-purple-300" />
@@ -219,53 +271,96 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
                 </div>
               )}
 
-              {messages.map((m, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-                >
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                      m.role === "user"
-                        ? "rounded-br-sm bg-gradient-to-br from-pink-500 to-blue-500 text-white"
-                        : "rounded-bl-sm border border-border bg-secondary/60 text-foreground/90"
-                    }`}
+              {messages.map((m, i) => {
+                const isUser = m.role === "user";
+                const isLastAssistant =
+                  !isUser && lastAssistantIdx !== -1 && i === messages.length - 1 - lastAssistantIdx;
+                return (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`flex items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
                   >
-                    <div className="whitespace-pre-wrap break-words">{m.content}</div>
-                    {m.role === "assistant" && i === messages.length - 1 && context.length > 0 && (
-                      <div className="mt-2.5 border-t border-white/10 pt-2">
-                        <div className="mb-1 text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">
-                          Sources
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {context.slice(0, 4).map((c, j) => (
-                            <a
-                              key={j}
-                              href={c.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-[0.65rem] text-cyan-400 hover:underline"
-                            >
-                              [{j + 1}]
-                            </a>
-                          ))}
-                        </div>
+                    {/* Bot avatar (assistant only) */}
+                    {!isUser && (
+                      <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-blue-500 text-white">
+                        <Bot className="h-4 w-4" />
                       </div>
                     )}
-                  </div>
-                </motion.div>
-              ))}
+                    <div
+                      className={`min-w-0 max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
+                        isUser
+                          ? "rounded-br-sm bg-gradient-to-br from-pink-500 to-blue-500 text-white shadow-lg shadow-pink-500/20"
+                          : "rounded-bl-sm border border-border bg-secondary/60 text-foreground/90"
+                      }`}
+                    >
+                      {isUser ? (
+                        <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                      ) : (
+                        <ChatMarkdown content={m.content} />
+                      )}
 
+                      {/* Sources — show ALL cited sources on the latest assistant message */}
+                      {isLastAssistant && context.length > 0 && (
+                        <div className="mt-2.5 border-t border-white/10 pt-2">
+                          <div className="mb-1.5 text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                            Sources
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {context.slice(0, 8).map((c, j) => (
+                              <a
+                                key={j}
+                                href={c.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={c.title}
+                                className="inline-flex h-5 min-w-5 items-center justify-center rounded bg-white/10 px-1.5 text-[0.65rem] font-medium text-cyan-400 transition-colors hover:bg-cyan-500/20 hover:text-cyan-300"
+                              >
+                                {j + 1}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {/* User avatar (user only) */}
+                    {isUser && (
+                      <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary border border-border text-muted-foreground">
+                        <UserIcon className="h-4 w-4" />
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })}
+
+              {/* Loading indicator with a subtle shimmer */}
               {loading && (
-                <div className="flex justify-start">
-                  <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-border bg-secondary/60 px-3.5 py-2.5">
-                    <Loader2 className="h-4 w-4 animate-spin text-purple-400" />
-                    <span className="text-xs text-muted-foreground">
-                      Pulse is reading the news…
+                <div className="flex items-end gap-2">
+                  <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-blue-500 text-white">
+                    <Bot className="h-4 w-4" />
+                  </div>
+                  <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-border bg-secondary/60 px-3.5 py-3">
+                    <span className="flex gap-1">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-purple-400 [animation-delay:-0.3s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-pink-400 [animation-delay:-0.15s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-400" />
                     </span>
                   </div>
+                </div>
+              )}
+
+              {/* Regenerate button under the last assistant message (when not loading) */}
+              {!loading && messages.length > 0 && lastAssistantIdx === 0 && (
+                <div className="flex justify-start pl-9">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 gap-1.5 text-[0.7rem] text-muted-foreground hover:text-foreground"
+                    onClick={regenerate}
+                  >
+                    <RotateCw className="h-3 w-3" /> Regenerate
+                  </Button>
                 </div>
               )}
             </div>
@@ -297,7 +392,7 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
                 disabled={loading || !input.trim()}
                 aria-label="Send message"
               >
-                <Send className="h-4 w-4" />
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               </Button>
             </form>
             <div className="mt-1.5 flex items-center justify-between px-1">
@@ -306,11 +401,7 @@ export function ChatPanel({ open, onOpenChange }: ChatPanelProps) {
               </Badge>
               {messages.length > 0 && (
                 <button
-                  onClick={() => {
-                    setMessages([]);
-                    setContext([]);
-                    toast.success("Chat cleared");
-                  }}
+                  onClick={clearChat}
                   className="flex items-center gap-1 text-[0.65rem] text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <Trash2 className="h-3 w-3" /> Clear
